@@ -1,0 +1,52 @@
+name: Weekly Blog Pipeline
+
+on:
+  schedule:
+    # 14:00 UTC every Monday = 9am Central during CDT (Mar-Nov), 8am Central during CST (Nov-Mar).
+    # If you'd rather always be 9am Central year-round, you'll need a tool that handles DST,
+    # since GitHub Actions cron is UTC-only. For now this drifts by 1hr in winter.
+    - cron: '0 14 * * 1'
+  workflow_dispatch:  # adds a "Run workflow" button in the Actions tab for manual triggers
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore service account JSON from secret
+        run: |
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+          # Sanity check the secret is valid JSON; fail early with a clear error if not.
+          python -c "import json; json.load(open('service_account.json'))"
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Run blog pipeline
+        env:
+          CONTENTFUL_CMA_TOKEN: ${{ secrets.CONTENTFUL_CMA_TOKEN }}
+          CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
+          CONTENTFUL_ENVIRONMENT: master
+          CONTENTFUL_CONTENT_TYPE: blogPost
+          CONTENTFUL_LOCALE: en-US
+          GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEET_WORKSHEET: '2026'
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+          PUBLISH_TZ: America/Chicago
+          PUBLISH_DOW: '0'
+          PUBLISH_HOUR: '9'
+        run: python run_pipeline.py
