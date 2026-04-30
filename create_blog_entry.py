@@ -387,12 +387,58 @@ def _heuristic_display_title(title):
     return " ".join(kept[:5])
 
 
+def _display_title_via_anthropic(prompt):
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    r = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        timeout=20,
+    )
+    r.raise_for_status()
+    blocks = r.json().get("content", [])
+    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+
+
+def _display_title_via_gemini(prompt):
+    key = os.environ.get("GOOGLE_AI_API_KEY")
+    if not key:
+        return None
+    r = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        params={"key": key},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": 64,
+                "temperature": 0.7,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        },
+        timeout=20,
+    )
+    r.raise_for_status()
+    candidates = r.json().get("candidates", [])
+    if not candidates:
+        return None
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
 def generate_display_title(full_title):
     """Convert a full blog title into a 3-6 word display title for the stage backdrop.
-    Tries Claude (Anthropic API) first; falls back to a heuristic on any error."""
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not anthropic_key:
-        return _heuristic_display_title(full_title)
+    Routes through TEXT_PROVIDER (anthropic|gemini); falls back to a heuristic on any error."""
+    provider = os.environ.get("TEXT_PROVIDER", "anthropic").lower()
     prompt = (
         "You write punchy display titles for corporate event stage backdrops. "
         "Convert the blog post title below into a 3-6 word display title. "
@@ -400,27 +446,13 @@ def generate_display_title(full_title):
         "Use title case. Reply with ONLY the display title, no quotes, no extra text.\n\n"
         f"Title: {full_title}"
     )
+    caller = _display_title_via_gemini if provider == "gemini" else _display_title_via_anthropic
     try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": anthropic_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 64,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        blocks = r.json().get("content", [])
-        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
-        text = text.strip('"\'.,;:').strip()
-        if 1 <= len(text.split()) <= 8 and len(text) <= 50:
-            return text
+        text = caller(prompt)
+        if text:
+            text = text.strip('"\'.,;:').strip()
+            if 1 <= len(text.split()) <= 8 and len(text) <= 50:
+                return text
     except Exception as e:
         print(f"   (display title API call failed: {e}; using heuristic)", file=sys.stderr)
     return _heuristic_display_title(full_title)
