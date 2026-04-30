@@ -117,10 +117,23 @@ def update(ws, row, headers, col_name, value):
         ws.update_cell(row, idx, value)
 
 
-def process_row(ws, headers, row_data, dry_run=False):
+def process_row(ws, headers, row_data, dry_run=False, force=False):
     row_num = row_data["__row__"]
     title = row_data.get("Title", "").strip()
     print(f"\n=== Row {row_num}: {title or '(no title)'} ===")
+
+    # Idempotency guard: if this row already has an Entry URL, don't republish.
+    existing_url = row_data.get("Entry URL", "").strip()
+    if existing_url and not force:
+        print(f"  SKIP: row already has Entry URL ({existing_url}). "
+              f"Use --force to republish.")
+        return False
+
+    # Empty-row guard: if every required field is blank, this is a placeholder row.
+    # Don't mark it Error, just skip silently.
+    if all(not row_data.get(c, "").strip() for c in REQUIRED_COLS):
+        print("  SKIP: row is empty (all required fields blank).")
+        return False
 
     missing = [c for c in REQUIRED_COLS
                if not row_data.get(c, "").strip()]
@@ -157,6 +170,7 @@ def process_row(ws, headers, row_data, dry_run=False):
         ("Display Title", "--display-title"),
         ("Speakers", "--speakers"),
         ("Author ID", "--author-id"),
+        ("Published Date", "--published-date"),
     ]:
         val = row_data.get(sheet_col, "").strip()
         if val:
@@ -207,6 +221,8 @@ def main():
                    help="Process this specific 1-indexed row (ignores Status)")
     p.add_argument("--dry-run", action="store_true",
                    help="Show what would run without executing")
+    p.add_argument("--force", action="store_true",
+                   help="Re-run rows that already have an Entry URL (creates duplicates)")
     args = p.parse_args()
 
     if not args.sheet_id:
@@ -223,7 +239,7 @@ def main():
         target = next((r for r in rows if r["__row__"] == args.row), None)
         if not target:
             sys.exit(f"Row {args.row} not found")
-        process_row(ws, headers, target, dry_run=args.dry_run)
+        process_row(ws, headers, target, dry_run=args.dry_run, force=args.force)
         return
 
     queued = [r for r in rows
@@ -234,9 +250,9 @@ def main():
     print(f"Found {len(queued)} Queued row(s)")
     if args.all:
         for r in queued:
-            process_row(ws, headers, r, dry_run=args.dry_run)
+            process_row(ws, headers, r, dry_run=args.dry_run, force=args.force)
     else:
-        process_row(ws, headers, queued[0], dry_run=args.dry_run)
+        process_row(ws, headers, queued[0], dry_run=args.dry_run, force=args.force)
 
 
 if __name__ == "__main__":

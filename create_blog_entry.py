@@ -359,11 +359,10 @@ def _heuristic_display_title(title):
 
 def generate_display_title(full_title):
     """Convert a full blog title into a 3-6 word display title for the stage backdrop.
-    Tries Gemini Flash first; falls back to a heuristic on any error."""
-    if not GOOGLE_KEY:
+    Tries Claude (Anthropic API) first; falls back to a heuristic on any error."""
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not anthropic_key:
         return _heuristic_display_title(full_title)
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           f"gemini-2.5-flash:generateContent?key={GOOGLE_KEY}")
     prompt = (
         "You write punchy display titles for corporate event stage backdrops. "
         "Convert the blog post title below into a 3-6 word display title. "
@@ -372,10 +371,23 @@ def generate_display_title(full_title):
         f"Title: {full_title}"
     )
     try:
-        r = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]},
-                          timeout=20)
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=20,
+        )
         r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        blocks = r.json().get("content", [])
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
         text = text.strip('"\'.,;:').strip()
         if 1 <= len(text.split()) <= 8 and len(text) <= 50:
             return text
@@ -429,6 +441,10 @@ def main():
                         "If omitted, auto-generated from --title via Gemini.")
     p.add_argument("--no-display-title", action="store_true",
                    help="Skip rendering any text on the backdrop in the hero image.")
+    p.add_argument("--published-date", default=None,
+                   help="ISO 8601 datetime for the Contentful publishedDate field "
+                        "(e.g. 2026-05-04T09:00:00-04:00). Sets when the post should "
+                        "be published; the entry itself still lands as a Draft.")
     p.add_argument("--locale", default=None)
     args = p.parse_args()
 
@@ -516,6 +532,8 @@ def main():
     }
     if args.category:
         fields["category"] = {LOCALE: args.category}
+    if args.published_date:
+        fields["publishedDate"] = {LOCALE: args.published_date}
     if args.tags:
         fields["tags"] = {LOCALE: [t.strip() for t in args.tags.split(",") if t.strip()]}
     if args.seo_keywords:
