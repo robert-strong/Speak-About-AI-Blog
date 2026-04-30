@@ -6,6 +6,9 @@ on:
     # If you'd rather always be 9am Central year-round, you'll need a tool that handles DST,
     # since GitHub Actions cron is UTC-only. For now this drifts by 1hr in winter.
     - cron: '0 14 * * 1'
+    # One-time test publish: 00:00 UTC on May 1 = 7:00pm CDT on April 30.
+    # Remove this line once the test run has fired so it doesn't repeat next year.
+    - cron: '0 0 1 5 *'
   workflow_dispatch:  # adds a "Run workflow" button in the Actions tab for manual triggers
 
 jobs:
