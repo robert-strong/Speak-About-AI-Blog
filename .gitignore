@@ -1,4 +1,5 @@
 .env
+.env.local
 .env.example
 service_account.json
 
