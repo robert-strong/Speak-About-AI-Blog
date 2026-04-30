@@ -127,15 +127,21 @@ def _gemini_text(prompt, max_tokens, temperature, model):
     if not GOOGLE_KEY:
         raise RuntimeError("GOOGLE_AI_API_KEY is not set.")
     gemini_model = ANTHROPIC_TO_GEMINI.get(model, "gemini-2.5-flash")
+    gen_config = {"maxOutputTokens": max_tokens, "temperature": temperature}
+    # Gemini 2.5 Flash spends its output budget on internal "thinking" by
+    # default, which truncates short generations. Disable thinking on Flash.
+    # Pro requires a minimum thinking budget, so instead bump the output
+    # budget to leave room for both the reasoning and the response.
+    if "flash" in gemini_model:
+        gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+    else:
+        gen_config["maxOutputTokens"] = max(max_tokens, 16384)
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent",
         params={"key": GOOGLE_KEY},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-            },
+            "generationConfig": gen_config,
         },
         timeout=180,
     )

@@ -64,6 +64,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -108,6 +109,35 @@ CATEGORY_OPTIONS = [
     "Speaker Spotlight",
     "Company News",
 ]
+
+
+_DATE_RE = re.compile(
+    r"^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?"
+    r"(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _normalize_iso_date(s):
+    """Normalize date strings to ISO 8601 for Contentful's Date field.
+    Handles Google Sheets' rendering of ISO datetimes (e.g. '2026-05-04 9:00:00')
+    that Contentful's API rejects."""
+    s = (s or "").strip()
+    if not s:
+        return s
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        pass
+    m = _DATE_RE.match(s)
+    if not m:
+        raise ValueError(f"Cannot parse published date: {s!r}")
+    y, mo, d, h, mi, se, tz = m.groups()
+    base = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}T{int(h):02d}:{int(mi):02d}:{int(se or 0):02d}"
+    if tz:
+        if tz != "Z" and ":" not in tz:
+            tz = tz[:3] + ":" + tz[3:]
+        base += tz
+    return datetime.fromisoformat(base.replace("Z", "+00:00")).isoformat()
 
 
 # --- Markdown -> Contentful Rich Text ---------------------------------------
@@ -533,7 +563,7 @@ def main():
     if args.category:
         fields["category"] = {LOCALE: args.category}
     if args.published_date:
-        fields["publishedDate"] = {LOCALE: args.published_date}
+        fields["publishedDate"] = {LOCALE: _normalize_iso_date(args.published_date)}
     if args.tags:
         fields["tags"] = {LOCALE: [t.strip() for t in args.tags.split(",") if t.strip()]}
     if args.seo_keywords:
