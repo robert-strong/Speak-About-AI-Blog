@@ -15,10 +15,10 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -28,9 +28,15 @@ jobs:
 
       - name: Restore service account JSON from secret
         run: |
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON repo secret is missing or empty. Add it at Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
-          # Sanity check the secret is valid JSON; fail early with a clear error if not.
-          python -c "import json; json.load(open('service_account.json'))"
+          python -c "import json; json.load(open('service_account.json'))" || {
+            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON. Paste the entire service_account.json file as the secret value (including the outer braces)."
+            exit 1
+          }
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
