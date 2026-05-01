@@ -1,0 +1,51 @@
+name: Monthly Brief Generation
+
+on:
+  schedule:
+    # 04:23 UTC on the 1st of every month = 11:23 PM Central on the last
+    # day of the previous month (CDT) / 10:23 PM (CST). Off-peak minute (:23)
+    # for low GitHub Actions queue congestion. Briefs land overnight; you
+    # have ~3-4 weeks to review/edit before the publishing pipeline fires
+    # on the last Monday of the month.
+    - cron: '23 4 1 * *'
+  workflow_dispatch:  # adds a "Run workflow" button for ad-hoc brief generation
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore service account JSON from secret
+        run: |
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON repo secret is missing or empty."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+          python -c "import json; json.load(open('service_account.json'))" || {
+            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON."
+            exit 1
+          }
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Generate briefs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEET_WORKSHEET: '2026'
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+        run: python generate_briefs.py --count 5
