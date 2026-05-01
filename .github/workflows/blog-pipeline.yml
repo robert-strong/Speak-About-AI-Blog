@@ -1,18 +1,48 @@
-name: Weekly Blog Pipeline
+name: Monthly Blog Pipeline
 
 on:
   schedule:
-    # 14:00 UTC every Monday = 9am Central during CDT (Mar-Nov), 8am Central during CST (Nov-Mar).
-    # If you'd rather always be 9am Central year-round, you'll need a tool that handles DST,
-    # since GitHub Actions cron is UTC-only. For now this drifts by 1hr in winter.
-    - cron: '0 14 * * 1'
-    # One-time test publish: 00:00 UTC on May 1 = 7:00pm CDT on April 30.
-    # Remove this line once the test run has fired so it doesn't repeat next year.
-    - cron: '0 0 1 5 *'
-  workflow_dispatch:  # adds a "Run workflow" button in the Actions tab for manual triggers
+    # Cron fires every Monday at 03:17 UTC. The "gate" job below filters this
+    # down to ONLY the LAST Monday of each calendar month. Off-peak minute (:17)
+    # and odd hour (03 UTC) avoid GitHub Actions queue congestion that delays
+    # top-of-the-hour jobs.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:  # always runs immediately, ignores the gate
 
 jobs:
+  # First job: decide whether this run should proceed. Manual triggers always
+  # proceed; scheduled triggers only proceed on the last Monday of the month.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Check if this run should proceed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger — proceeding regardless of date."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Today is a Monday (the cron only fires on Mondays). To check if
+          # it's the LAST Monday of the month, see whether 7 days from now
+          # falls in a different calendar month. If yes, today is the last
+          # Monday; if no, there's another Monday this month.
+          this_month=$(date -u +%m)
+          next_week_month=$(date -u -d '+7 days' +%m)
+          if [ "$this_month" != "$next_week_month" ]; then
+            echo "Last Monday of $(date -u +%B %Y) — proceeding."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not the last Monday of the month (next Monday is still in this month) — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
