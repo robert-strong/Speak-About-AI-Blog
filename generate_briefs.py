@@ -228,9 +228,21 @@ def claude_generate(existing_briefs, count):
     return briefs
 
 
+REQUIRED_HEADERS = ("Status", "Brief")
+
+
+def validate_headers(headers):
+    missing = [h for h in REQUIRED_HEADERS if h not in headers]
+    if missing:
+        sys.exit(
+            f"Sheet is missing required header column(s): {missing}.\n"
+            f"  Required: {list(REQUIRED_HEADERS)}\n"
+            f"  Found in row 1: {headers}\n"
+            "Headers are exact, case-sensitive matches with no surrounding whitespace."
+        )
+
+
 def append_to_sheet(ws, headers, briefs):
-    if "Status" not in headers or "Brief" not in headers:
-        sys.exit("Sheet must have 'Status' and 'Brief' header columns.")
     status_idx = headers.index("Status")
     brief_idx = headers.index("Brief")
     rows = []
@@ -262,6 +274,7 @@ def main():
     if not all_values:
         sys.exit("Sheet is empty - needs at least a header row.")
     headers = all_values[0]
+    validate_headers(headers)
 
     existing = get_existing_briefs(ws, headers)
     print(f"Found {len(existing)} existing brief(s) in the sheet (using last 30 for de-dup context).")
