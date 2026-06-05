@@ -244,13 +244,32 @@ def markdown_to_richtext(md):
 
 # --- Image generation -------------------------------------------------------
 
+# Retry image-gen calls on 429 (rate limit / quota) with exponential backoff.
+# Many Imagen 429s are per-minute throttling that clear quickly; sustained
+# 429s likely mean daily quota exhausted and will keep failing.
+_IMAGE_RETRY_DELAYS = [15, 30, 60, 120]  # seconds; 4 retries total
+
+
+def _post_with_retry(url, payload, label):
+    """POST with exponential backoff on 429. Returns the final response."""
+    for attempt, delay in enumerate([0] + _IMAGE_RETRY_DELAYS):
+        if delay:
+            print(f"   {label}: 429 rate-limited; retry {attempt}/{len(_IMAGE_RETRY_DELAYS)} "
+                  f"in {delay}s...", file=sys.stderr)
+            time.sleep(delay)
+        r = requests.post(url, json=payload, timeout=60)
+        if r.status_code != 429:
+            return r
+    return r  # final 429 response after exhausting retries
+
+
 def generate_image_imagen3(prompt, aspect_ratio="16:9"):
     """Uses imagen-4.0-generate-001 (current Imagen model on AI Studio)."""
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
            f"imagen-4.0-generate-001:predict?key={GOOGLE_KEY}")
     payload = {"instances": [{"prompt": prompt}],
                "parameters": {"sampleCount": 1, "aspectRatio": aspect_ratio}}
-    r = requests.post(url, json=payload, timeout=60)
+    r = _post_with_retry(url, payload, "Imagen")
     if not r.ok:
         raise RuntimeError(f"Imagen error {r.status_code}: {r.text}")
     preds = (r.json().get("predictions") or [])
@@ -265,7 +284,7 @@ def generate_image_gemini(prompt):
            f"gemini-2.5-flash-image:generateContent?key={GOOGLE_KEY}")
     payload = {"contents": [{"parts": [{"text": prompt}]}],
                "generationConfig": {"responseModalities": ["IMAGE"]}}
-    r = requests.post(url, json=payload, timeout=60)
+    r = _post_with_retry(url, payload, "Gemini image")
     if not r.ok:
         raise RuntimeError(f"Gemini image error {r.status_code}: {r.text}")
     for cand in r.json().get("candidates", []):
@@ -440,11 +459,26 @@ def generate_display_title(full_title):
     Routes through TEXT_PROVIDER (anthropic|gemini); falls back to a heuristic on any error."""
     provider = os.environ.get("TEXT_PROVIDER", "anthropic").lower()
     prompt = (
-        "You write punchy display titles for corporate event stage backdrops. "
-        "Convert the blog post title below into a 3-6 word display title. "
-        "Drop filler words like 'how to', 'for your', 'the ultimate'. "
-        "Use title case. Reply with ONLY the display title, no quotes, no extra text.\n\n"
-        f"Title: {full_title}"
+        "You write punchy, attention-grabbing display titles that go on stage backdrops "
+        "and brand banners — like a magazine cover line or a movie poster tagline, NOT a "
+        "literal abbreviation of the article title. The goal is to make a viewer curious "
+        "and pull them in.\n\n"
+        "Constraints:\n"
+        "- 2-5 words\n"
+        "- Strong verbs and concrete nouns; avoid abstract words like 'guide', 'overview', "
+        "'introduction', 'approach', 'strategies', 'insights'\n"
+        "- Title case or all-caps acceptable; no quotes; no punctuation at the end\n"
+        "- Should feel bold, declarative, and a little provocative — never bland\n"
+        "- Reply with ONLY the display title, no labels or preamble\n\n"
+        "Examples (article title -> display title):\n"
+        "  'How to Choose an AI Keynote Speaker for Your Next Event' -> 'PICK YOUR AI VOICE'\n"
+        "  '5 Ways AI Speakers Elevate Sales Kickoffs' -> 'SALES, REWIRED'\n"
+        "  'AI in Healthcare: A Practical Guide for Hospital Leaders' -> 'SMARTER CARE NOW'\n"
+        "  'AI Ethics for Business Leaders' -> 'THE RIGHT KIND OF AI'\n"
+        "  'How AI Is Changing the Insurance Industry' -> 'INSURANCE GETS SMART'\n"
+        "  'Why Every Sales Kickoff Needs an AI Speaker' -> 'KICKOFF GOES AI'\n\n"
+        f"Article title: {full_title}\n"
+        "Display title:"
     )
     caller = _display_title_via_gemini if provider == "gemini" else _display_title_via_anthropic
     try:
@@ -595,7 +629,7 @@ def main():
     if args.category:
         fields["category"] = {LOCALE: args.category}
     if args.published_date:
-        fields["publishedDate"] = {LOCALE: _normalize_iso_date(args.published_date)}
+        fields["publishedDate"] = {LOCALE: args.published_date}
     if args.tags:
         fields["tags"] = {LOCALE: [t.strip() for t in args.tags.split(",") if t.strip()]}
     if args.seo_keywords:
