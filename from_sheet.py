@@ -54,8 +54,14 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+
+# Sleep between rows when processing --all, to stay under the per-minute image
+# generation cap (Paid Tier 1: 10 imagen-4.0-generate requests/min). 10s spacing
+# = max 6/min, well under the cap with margin for retries. Override via env.
+INTER_ROW_DELAY = int(os.environ.get("INTER_ROW_DELAY", "10"))
 
 try:
     from dotenv import load_dotenv
@@ -249,7 +255,10 @@ def main():
         return
     print(f"Found {len(queued)} Queued row(s)")
     if args.all:
-        for r in queued:
+        for i, r in enumerate(queued):
+            if i > 0 and INTER_ROW_DELAY > 0 and not args.dry_run:
+                print(f"\n(throttling: sleeping {INTER_ROW_DELAY}s before next row to stay under per-minute API caps)")
+                time.sleep(INTER_ROW_DELAY)
             process_row(ws, headers, r, dry_run=args.dry_run, force=args.force)
     else:
         process_row(ws, headers, queued[0], dry_run=args.dry_run, force=args.force)
