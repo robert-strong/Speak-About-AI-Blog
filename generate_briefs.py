@@ -318,8 +318,39 @@ def claude_generate(existing_briefs, count, settings=None):
         preview = str(item)[:100] if item else "(empty)"
         print(f"      [{i}] ({item_type}): {preview}...")
 
-    briefs = [b.strip() for b in briefs if isinstance(b, str) and b.strip()]
-    return briefs
+    # Handle both string briefs and object briefs
+    # If Claude returned objects (dicts), convert them to strings
+    processed = []
+    for item in briefs:
+        if isinstance(item, str) and item.strip():
+            processed.append(item.strip())
+        elif isinstance(item, dict):
+            # Convert dict to a formatted brief string
+            # Try common field names for the brief content
+            brief_text = None
+
+            # Check for a 'brief' or 'content' field first
+            for key in ['brief', 'content', 'description', 'summary', 'text']:
+                if key in item and item[key]:
+                    brief_text = str(item[key]).strip()
+                    break
+
+            # If no content field, format all fields as a structured brief
+            if not brief_text:
+                parts = []
+                for key, value in item.items():
+                    if value:
+                        # Format arrays as comma-separated
+                        if isinstance(value, list):
+                            value = ", ".join(str(v) for v in value)
+                        parts.append(f"{key.replace('_', ' ').title()}: {value}")
+                brief_text = " | ".join(parts)
+
+            if brief_text:
+                processed.append(brief_text)
+                print(f"   Converted dict to brief string ({len(brief_text)} chars)")
+
+    return processed
 
 
 REQUIRED_HEADERS = ("Status", "Brief")
