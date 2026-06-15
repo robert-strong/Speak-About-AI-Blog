@@ -280,6 +280,20 @@ def process_item_api(api, item, dry_run=False, force=False):
         if item.get("published_date"):
             cmd.extend(["--published-date", item["published_date"]])
 
+        # Image style settings (fetched from API settings)
+        try:
+            style_ref = api.get_setting("image_style_reference")
+            if style_ref:
+                cmd.extend(["--style-reference", style_ref])
+        except:
+            pass
+        try:
+            style_desc = api.get_setting("image_style_description")
+            if style_desc:
+                cmd.extend(["--style-description", style_desc])
+        except:
+            pass
+
         print("  Command:")
         print("    " + " ".join(repr(a) for a in cmd[:6]) + " ...")
         if dry_run:

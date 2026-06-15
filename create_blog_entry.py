@@ -25,9 +25,10 @@ Optional flags:
     --tags              Comma-separated tags
     --seo-keywords      SEO keywords short text
     --speakers          Comma-separated speaker names
-    --image-model       'imagen-3' (default, uses imagen-4.0-generate-001 with
-                        aspect ratio support) or 'gemini-2.5-flash'
-    --aspect-ratio      For imagen only. Default '16:9'. Other: '1:1','9:16','3:4','4:3'.
+    --image-model       'gemini-3.1-flash' (default) - uses gemini-3.1-flash-image
+    --aspect-ratio      Aspect ratio guidance. Default '16:9'. Other: '1:1','9:16','3:4','4:3'.
+    --style-reference   URL to a reference image for style guidance
+    --style-description Additional description for image style/look
     --locale            Default 'en-US'. Override if your space uses a different locale.
 
 REQUIRED ENV VARS (or place in a .env file beside this script)
@@ -263,36 +264,72 @@ def _post_with_retry(url, payload, label):
     return r  # final 429 response after exhausting retries
 
 
-def generate_image_imagen3(prompt, aspect_ratio="16:9"):
-    """Uses imagen-4.0-generate-001 (current Imagen model on AI Studio)."""
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           f"imagen-4.0-generate-001:predict?key={GOOGLE_KEY}")
-    payload = {"instances": [{"prompt": prompt}],
-               "parameters": {"sampleCount": 1, "aspectRatio": aspect_ratio}}
-    r = _post_with_retry(url, payload, "Imagen")
-    if not r.ok:
-        raise RuntimeError(f"Imagen error {r.status_code}: {r.text}")
-    preds = (r.json().get("predictions") or [])
-    if not preds or "bytesBase64Encoded" not in preds[0]:
-        raise RuntimeError(f"Unexpected Imagen response: {r.text}")
-    return base64.b64decode(preds[0]["bytesBase64Encoded"])
+def generate_image_gemini_flash(prompt, aspect_ratio="16:9", style_reference_url=None, style_description=None):
+    """Uses gemini-3.1-flash-image (replaces deprecated imagen-4.0-generate-001).
 
-
-def generate_image_gemini(prompt):
-    """Uses gemini-2.5-flash-image (Nano Banana)."""
+    Args:
+        prompt: The image generation prompt
+        aspect_ratio: Image aspect ratio (used in prompt guidance)
+        style_reference_url: Optional URL to a reference image for style guidance
+        style_description: Optional additional description for image style
+    """
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           f"gemini-2.5-flash-image:generateContent?key={GOOGLE_KEY}")
-    payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "generationConfig": {"responseModalities": ["IMAGE"]}}
-    r = _post_with_retry(url, payload, "Gemini image")
+           f"gemini-3.1-flash-image:generateContent?key={GOOGLE_KEY}")
+
+    # Build the prompt with style guidance
+    full_prompt = prompt
+    if style_description:
+        full_prompt = f"{prompt}\n\nStyle guidance: {style_description}"
+    if aspect_ratio != "16:9":
+        full_prompt = f"{full_prompt}\n\nAspect ratio: {aspect_ratio}"
+
+    # Build content parts
+    parts = []
+
+    # If we have a style reference image URL, fetch and include it
+    if style_reference_url:
+        try:
+            img_response = requests.get(style_reference_url, timeout=30)
+            if img_response.ok:
+                img_data = base64.b64encode(img_response.content).decode('utf-8')
+                # Detect mime type
+                content_type = img_response.headers.get('content-type', 'image/png')
+                parts.append({
+                    "inlineData": {
+                        "mimeType": content_type,
+                        "data": img_data
+                    }
+                })
+                parts.append({"text": f"Use the above image as a style reference. Generate a new image with this style: {full_prompt}"})
+            else:
+                parts.append({"text": full_prompt})
+        except Exception as e:
+            print(f"Warning: Could not fetch style reference image: {e}")
+            parts.append({"text": full_prompt})
+    else:
+        parts.append({"text": full_prompt})
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {"responseModalities": ["IMAGE"]}
+    }
+
+    r = _post_with_retry(url, payload, "Gemini Flash")
     if not r.ok:
-        raise RuntimeError(f"Gemini image error {r.status_code}: {r.text}")
+        raise RuntimeError(f"Gemini Flash error {r.status_code}: {r.text}")
+
     for cand in r.json().get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             inline = part.get("inlineData") or part.get("inline_data")
             if inline and inline.get("data"):
                 return base64.b64decode(inline["data"])
-    raise RuntimeError(f"No image bytes in Gemini response: {r.text}")
+    raise RuntimeError(f"No image bytes in Gemini Flash response: {r.text}")
+
+
+# Legacy function for backwards compatibility - redirects to new implementation
+def generate_image_gemini(prompt):
+    """Legacy wrapper - uses gemini-3.1-flash-image."""
+    return generate_image_gemini_flash(prompt)
 
 
 # --- Contentful asset + entry -----------------------------------------------
@@ -524,9 +561,14 @@ def main():
                    help=f"Contentful entry ID for the author. Default: Robert Strong ({DEFAULT_AUTHOR_ID}).")
     p.add_argument("--status", default=DEFAULT_STATUS,
                    help=f"Status field value. Default: '{DEFAULT_STATUS}'.")
-    p.add_argument("--image-model", default="imagen-3",
-                   choices=["imagen-3", "gemini-2.5-flash"])
+    p.add_argument("--image-model", default="gemini-3.1-flash",
+                   choices=["gemini-3.1-flash"],
+                   help="Image generation model (default: gemini-3.1-flash)")
     p.add_argument("--aspect-ratio", default="16:9")
+    p.add_argument("--style-reference", default=None,
+                   help="URL to a reference image for style guidance")
+    p.add_argument("--style-description", default=None,
+                   help="Additional description for image style/look")
     p.add_argument("--style-file", default=None,
                    help="Path to a brand-style preamble file. "
                         "Default: image_style.txt next to script if present.")
@@ -590,10 +632,16 @@ def main():
         if style:
             print(f"-> Style preamble loaded ({len(style)} chars)")
         print(f"-> Generating image with {args.image_model}...")
-        if args.image_model == "imagen-3":
-            img_bytes = generate_image_imagen3(full_prompt, args.aspect_ratio)
-        else:
-            img_bytes = generate_image_gemini(full_prompt)
+        if args.style_reference:
+            print(f"   Style reference: {args.style_reference}")
+        if args.style_description:
+            print(f"   Style description: {args.style_description[:100]}...")
+        img_bytes = generate_image_gemini_flash(
+            full_prompt,
+            aspect_ratio=args.aspect_ratio,
+            style_reference_url=args.style_reference,
+            style_description=args.style_description
+        )
         content_type = "image/png"
         file_ext = "png"
         print(f"   Got {len(img_bytes):,} bytes")
