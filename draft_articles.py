@@ -2,22 +2,23 @@
 """
 draft_articles.py
 -----------------
-Brief-driven drafting. For each row in the queue sheet with Status=Queued
-and Body Path empty, generate via Gemini whatever fields are missing:
+Brief-driven drafting. For each item in the queue with Status=queued,
+generate whatever fields are missing:
     Title, Body, Excerpt, Meta Description, Image Prompt,
     Category, Tags, SEO Keywords
 
-You provide Brief (and Status=Queued). The drafter fills in the rest.
+Supports two backends:
+1. REST API (preferred): Database-backed queue via speakabout.ai API
+2. Google Sheets (legacy fallback): Read/write from a Google Sheet
+
+You provide Brief (and Status=queued). The drafter fills in the rest.
 Anything you DO fill in by hand wins — the drafter only generates fields
-left empty in the sheet.
-
-Body is saved to drafts/<slug>.md (slug derived from the generated/given Title).
-
-Run BEFORE from_sheet.py. Or use run_pipeline.py to run both in sequence.
+left empty.
 
 USAGE
-    python3 draft_articles.py                # draft all eligible rows
-    python3 draft_articles.py --row 5        # specific row (ignores Status)
+    python3 draft_articles.py                # draft all eligible items
+    python3 draft_articles.py --limit 5      # process up to 5 items
+    python3 draft_articles.py --row 5        # specific row (sheets only)
     python3 draft_articles.py --dry-run      # show plan, don't write
 """
 
@@ -50,16 +51,42 @@ except ImportError:
     pass
 
 import requests
-import gspread
-from google.oauth2.service_account import Credentials
 
+# Only import Google Sheets libraries if needed (they may not be installed)
+gspread = None
+Credentials = None
 
+USE_BLOG_API = os.environ.get("USE_BLOG_API", "").lower() == "true"
+
+# Google Sheets config (legacy)
 SHEET_ID = os.environ.get("SHEET_ID")
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE",
                                       "service_account.json")
 WORKSHEET_NAME = os.environ.get("SHEET_WORKSHEET", "Sheet1")
 GOOGLE_KEY = os.environ.get("GOOGLE_AI_API_KEY")  # not used here; kept for parity
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# API client (lazy import)
+_api_client = None
+
+
+def _get_api_client():
+    """Lazy-load the API client."""
+    global _api_client
+    if _api_client is None:
+        from api_client import BlogPipelineAPI
+        _api_client = BlogPipelineAPI()
+    return _api_client
+
+
+def _load_gspread():
+    """Lazy-load Google Sheets libraries."""
+    global gspread, Credentials
+    if gspread is None:
+        import gspread as gs
+        from google.oauth2.service_account import Credentials as Creds
+        gspread = gs
+        Credentials = Creds
 
 DRAFTS_DIR = Path("drafts")
 # Hybrid model setup: cheap Haiku for short fields, Sonnet for the long-form body.
@@ -425,6 +452,7 @@ def assign_publish_dates(ws, headers, rows):
 
 
 def open_sheet():
+    _load_gspread()
     creds = Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE,
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -600,42 +628,206 @@ def process_row(ws, headers, row_data, dry_run=False):
         return False
 
 
+def is_eligible_api(item):
+    """Check if an API queue item is eligible for drafting."""
+    status = (item.get("status") or "").strip().lower()
+    brief = (item.get("brief") or "").strip()
+    if status != "queued" or not brief:
+        return False
+    if item.get("contentful_entry_url", "").strip():
+        return False  # already published
+    # Check if body content exists
+    if item.get("body_content", "").strip():
+        # Has body, check if other fields are missing
+        for field in ("title", "excerpt", "meta_description", "image_prompt", "category"):
+            if not item.get(field, "").strip():
+                return True
+        return False
+    return True
+
+
+def process_item_api(api, item, dry_run=False):
+    """Process a single queue item via API."""
+    item_id = item["id"]
+    brief = (item.get("brief") or "").strip()
+    if not brief:
+        print(f"Item {item_id}: missing brief, skipping")
+        return False
+
+    title_existing = (item.get("title") or "").strip()
+    print(f"\n=== Item {item_id} ===")
+    print(f"  Brief: {brief[:140]}{'...' if len(brief) > 140 else ''}")
+
+    if dry_run:
+        plan = []
+        if not title_existing: plan.append("Title")
+        plan.append("Body")
+        if not item.get("excerpt", "").strip(): plan.append("Excerpt")
+        if not item.get("meta_description", "").strip(): plan.append("Meta Description")
+        if not item.get("image_prompt", "").strip(): plan.append("Image Prompt")
+        if not item.get("category", "").strip(): plan.append("Category")
+        if not item.get("tags"): plan.append("Tags")
+        if not item.get("seo_keywords", "").strip(): plan.append("SEO Keywords")
+        print(f"  Would generate: {', '.join(plan)}")
+        return True
+
+    try:
+        # Update status to processing
+        api.update_item(item_id, status="processing",
+                       last_run=datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                       notes="Drafting...")
+
+        # 1. Title
+        if title_existing:
+            title = title_existing
+            print(f"  Title (existing): {title}")
+        else:
+            print("  -> Generating title...")
+            title = draft_title(brief)
+            print(f"     {title}")
+            api.update_item(item_id, title=title)
+
+        slug = (item.get("slug") or "").strip() or slugify(title)
+        if not item.get("slug"):
+            api.update_item(item_id, slug=slug)
+
+        # 2. Body
+        existing_body = (item.get("body_content") or "").strip()
+        if existing_body:
+            body = existing_body
+            print(f"  Body (existing, {len(body):,} chars)")
+        else:
+            print("  -> Generating body...")
+            body = draft_body(title, brief)
+            print(f"     Generated {len(body):,} chars")
+            api.update_item(item_id, body_content=body)
+
+        # 3. Excerpt (if missing)
+        if not item.get("excerpt", "").strip():
+            print("  -> Generating excerpt...")
+            excerpt = draft_excerpt(body)
+            print(f"     {excerpt}")
+            api.update_item(item_id, excerpt=excerpt)
+
+        # 4. Meta description (if missing)
+        if not item.get("meta_description", "").strip():
+            print("  -> Generating meta description...")
+            meta = draft_meta(body)
+            print(f"     ({len(meta)} chars) {meta}")
+            api.update_item(item_id, meta_description=meta)
+
+        # 5. Image prompt (if missing)
+        if not item.get("image_prompt", "").strip():
+            print("  -> Generating image prompt...")
+            img = draft_image_prompt(title, brief)
+            print(f"     {img}")
+            api.update_item(item_id, image_prompt=img)
+
+        # 6. Category (if missing)
+        if not item.get("category", "").strip():
+            print("  -> Picking category...")
+            cat = draft_category(title, brief)
+            print(f"     {cat}")
+            api.update_item(item_id, category=cat)
+
+        # 7. Tags (if missing)
+        if not item.get("tags"):
+            print("  -> Generating tags...")
+            tags = draft_tags(title, brief)
+            print(f"     {tags}")
+            # Convert comma-separated string to array
+            tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+            api.update_item(item_id, tags=tags_list)
+
+        # 8. SEO keywords (if missing)
+        if not item.get("seo_keywords", "").strip():
+            print("  -> Generating SEO keywords...")
+            seo = draft_seo(title, brief)
+            print(f"     {seo}")
+            api.update_item(item_id, seo_keywords=seo)
+
+        # Mark as drafted
+        api.update_item(item_id, status="drafted", notes="Draft ready")
+        print("  -> Status: drafted")
+        return True
+    except Exception as e:
+        print(f"  ERROR: {e}", file=sys.stderr)
+        api.update_item(item_id, status="error",
+                       error_message=f"Drafting failed: {e}"[:500],
+                       notes=f"Drafting failed: {e}"[:500])
+        return False
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--row", type=int, default=None,
-                   help="Process this specific row (ignores Status check)")
+                   help="Process this specific row (Google Sheets only, ignores Status)")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Maximum number of items to process")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
-    if not SHEET_ID:
-        sys.exit("SHEET_ID env var required.")
-    if not Path(SERVICE_ACCOUNT_FILE).exists():
-        sys.exit(f"Service account file not found at {SERVICE_ACCOUNT_FILE}.")
+    if USE_BLOG_API:
+        # REST API backend
+        print("Using REST API backend...")
+        api = _get_api_client()
 
-    ws = open_sheet()
-    headers, rows = read_rows(ws)
-    print(f"Sheet '{ws.title}' has {len(rows)} data rows")
+        print("Fetching queued items from API...")
+        items = api.get_queued_items()
+        print(f"Found {len(items)} queued item(s)")
 
-    if "Brief" not in headers:
-        sys.exit("Sheet is missing a 'Brief' column. Add it to the header row.")
+        eligible = [i for i in items if is_eligible_api(i)]
+        if not eligible:
+            print("No items need drafting.")
+            return
 
-    # Auto-assign Published Date to any Queued rows missing one (weekly Mondays).
-    assign_publish_dates(ws, headers, rows)
+        if args.limit:
+            eligible = eligible[:args.limit]
 
-    if args.row is not None:
-        target = next((r for r in rows if r["__row__"] == args.row), None)
-        if not target:
-            sys.exit(f"Row {args.row} not found")
-        process_row(ws, headers, target, dry_run=args.dry_run)
-        return
+        print(f"Processing {len(eligible)} item(s)")
+        success = 0
+        for item in eligible:
+            if process_item_api(api, item, dry_run=args.dry_run):
+                success += 1
 
-    eligible = [r for r in rows if is_eligible(r)]
-    if not eligible:
-        print("No rows need drafting.")
-        return
-    print(f"Found {len(eligible)} row(s) needing drafts")
-    for r in eligible:
-        process_row(ws, headers, r, dry_run=args.dry_run)
+        print(f"\nDrafted {success}/{len(eligible)} items")
+
+    else:
+        # Legacy Google Sheets backend
+        print("Using Google Sheets backend (legacy)...")
+        if not SHEET_ID:
+            sys.exit("SHEET_ID env var required (or set USE_BLOG_API=true).")
+        if not Path(SERVICE_ACCOUNT_FILE).exists():
+            sys.exit(f"Service account file not found at {SERVICE_ACCOUNT_FILE}.")
+
+        ws = open_sheet()
+        headers, rows = read_rows(ws)
+        print(f"Sheet '{ws.title}' has {len(rows)} data rows")
+
+        if "Brief" not in headers:
+            sys.exit("Sheet is missing a 'Brief' column. Add it to the header row.")
+
+        # Auto-assign Published Date to any Queued rows missing one (weekly Mondays).
+        assign_publish_dates(ws, headers, rows)
+
+        if args.row is not None:
+            target = next((r for r in rows if r["__row__"] == args.row), None)
+            if not target:
+                sys.exit(f"Row {args.row} not found")
+            process_row(ws, headers, target, dry_run=args.dry_run)
+            return
+
+        eligible = [r for r in rows if is_eligible(r)]
+        if not eligible:
+            print("No rows need drafting.")
+            return
+
+        if args.limit:
+            eligible = eligible[:args.limit]
+
+        print(f"Found {len(eligible)} row(s) needing drafts")
+        for r in eligible:
+            process_row(ws, headers, r, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
