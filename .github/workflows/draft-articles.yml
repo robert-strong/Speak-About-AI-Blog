@@ -1,0 +1,49 @@
+name: Draft Articles from Briefs
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Maximum number of briefs to process'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore service account JSON from secret
+        run: |
+          if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+          fi
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Draft articles
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # REST API backend (preferred)
+          USE_BLOG_API: ${{ vars.USE_BLOG_API || 'true' }}
+          BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
+          BLOG_PIPELINE_API_KEY: ${{ secrets.BLOG_PIPELINE_API_KEY }}
+          # Legacy Google Sheets backend (fallback)
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEET_WORKSHEET: '2026'
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+        run: python draft_articles.py --limit ${{ github.event.inputs.limit || '5' }}

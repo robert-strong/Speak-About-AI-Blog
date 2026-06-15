@@ -3,13 +3,13 @@
 generate_briefs.py
 ------------------
 Use Claude to brainstorm fresh AI-related blog briefs and append them to the
-queue sheet. Each brief lands as a new row with Status=Queued and Brief
-populated; the existing pipeline (draft_articles.py + from_sheet.py) takes
-it from there.
+queue. Supports two backends:
 
-Briefs are written to be detailed, reference real recent AI developments,
-target SEO keywords, and include a natural CTA hook toward Speak About AI's
-keynote speaker roster.
+1. REST API (preferred): Database-backed queue via speakabout.ai API
+2. Google Sheets (legacy fallback): Append to a Google Sheet
+
+The backend is selected via USE_BLOG_API env var. When set to 'true', the
+REST API is used; otherwise falls back to Google Sheets.
 
 USAGE
     python3 generate_briefs.py                # generate 5 briefs (default)
@@ -18,6 +18,13 @@ USAGE
 
 Required env (loaded from .env / .env.local or set externally):
     ANTHROPIC_API_KEY        — sk-ant-api03-...
+
+For REST API backend (preferred):
+    USE_BLOG_API             — set to 'true' to use REST API
+    BLOG_API_BASE            — API base URL (default: https://speakabout.ai/api/blog-pipeline)
+    BLOG_PIPELINE_API_KEY    — API key for authentication
+
+For Google Sheets backend (legacy fallback):
     SHEET_ID                 — Google Sheet ID
     GOOGLE_SERVICE_ACCOUNT_FILE — path to service_account.json (default: ./service_account.json)
     SHEET_WORKSHEET          — worksheet name (default: Sheet1)
@@ -45,17 +52,44 @@ except ImportError:
     pass
 
 import requests
-import gspread
-from google.oauth2.service_account import Credentials
 
+# Only import Google Sheets libraries if needed (they may not be installed)
+gspread = None
+Credentials = None
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
+USE_BLOG_API = os.environ.get("USE_BLOG_API", "").lower() == "true"
+
+# Google Sheets config (legacy)
 SHEET_ID = os.environ.get("SHEET_ID")
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE",
                                       "service_account.json")
 WORKSHEET_NAME = os.environ.get("SHEET_WORKSHEET", "Sheet1")
+
 TEXT_MODEL = "claude-sonnet-4-6"  # Sonnet for higher-quality brainstorming
 ANTHROPIC_VERSION = "2023-06-01"
+
+# API client (lazy import)
+_api_client = None
+
+
+def _get_api_client():
+    """Lazy-load the API client."""
+    global _api_client
+    if _api_client is None:
+        from api_client import BlogPipelineAPI
+        _api_client = BlogPipelineAPI()
+    return _api_client
+
+
+def _load_gspread():
+    """Lazy-load Google Sheets libraries."""
+    global gspread, Credentials
+    if gspread is None:
+        import gspread as gs
+        from google.oauth2.service_account import Credentials as Creds
+        gspread = gs
+        Credentials = Creds
 
 
 BRIEFS_PROMPT = """You are generating fresh blog post briefs for Speak About AI (https://speakabout.ai), a premier AI keynote speakers bureau. The audience for the resulting articles: event planners, corporate marketers, sales/revenue/HR/L&D leaders, and executives who book speakers for corporate events. The articles should also rank in Google for AI-related search queries and pull organic traffic to speakabout.ai.
@@ -124,6 +158,7 @@ Example output structure:
 
 
 def open_sheet():
+    _load_gspread()
     creds = Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE,
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -256,44 +291,76 @@ def append_to_sheet(ws, headers, briefs):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Generate AI blog briefs and append to queue sheet.")
+    p = argparse.ArgumentParser(description="Generate AI blog briefs and append to queue.")
     p.add_argument("--count", type=int, default=5,
                    help="Number of briefs to generate (default 5; covers 5-Monday months).")
     p.add_argument("--dry-run", action="store_true",
-                   help="Preview briefs without writing to the sheet.")
+                   help="Preview briefs without writing to the queue.")
     args = p.parse_args()
 
-    if not SHEET_ID:
-        sys.exit("SHEET_ID env var required.")
-    if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        sys.exit(f"Service account file not found at {SERVICE_ACCOUNT_FILE}.")
+    # Determine which backend to use
+    if USE_BLOG_API:
+        print("Using REST API backend...")
+        api = _get_api_client()
 
-    print(f"Opening sheet {SHEET_ID} (worksheet: {WORKSHEET_NAME})...")
-    ws = open_sheet()
-    all_values = ws.get_all_values()
-    if not all_values:
-        sys.exit("Sheet is empty - needs at least a header row.")
-    headers = all_values[0]
-    validate_headers(headers)
+        # Get existing briefs via API
+        print("Fetching existing briefs from API...")
+        existing = api.get_existing_briefs(limit=30)
+        print(f"Found {len(existing)} existing brief(s) (using last 30 for de-dup context).")
 
-    existing = get_existing_briefs(ws, headers)
-    print(f"Found {len(existing)} existing brief(s) in the sheet (using last 30 for de-dup context).")
+        print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
+        briefs = claude_generate(existing, args.count)
+        print(f"Generated {len(briefs)} briefs.\n")
 
-    print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-    briefs = claude_generate(existing, args.count)
-    print(f"Generated {len(briefs)} briefs.\n")
+        for i, b in enumerate(briefs, 1):
+            print(f"--- Brief {i} ({len(b)} chars) ---")
+            print(b)
+            print()
 
-    for i, b in enumerate(briefs, 1):
-        print(f"--- Brief {i} ({len(b)} chars) ---")
-        print(b)
-        print()
+        if args.dry_run:
+            print("[dry-run] Not writing to queue.")
+            return
 
-    if args.dry_run:
-        print("[dry-run] Not writing to sheet.")
-        return
+        # Create briefs via API
+        created = api.create_briefs(briefs)
+        print(f"Created {len(created)} new queued briefs via API.")
+        for item in created:
+            print(f"   - ID {item['id']}: {item['brief'][:60]}...")
 
-    n = append_to_sheet(ws, headers, briefs)
-    print(f"Appended {n} new Queued briefs to '{ws.title}'.")
+    else:
+        # Legacy Google Sheets backend
+        print("Using Google Sheets backend (legacy)...")
+        if not SHEET_ID:
+            sys.exit("SHEET_ID env var required (or set USE_BLOG_API=true to use REST API).")
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            sys.exit(f"Service account file not found at {SERVICE_ACCOUNT_FILE}.")
+
+        print(f"Opening sheet {SHEET_ID} (worksheet: {WORKSHEET_NAME})...")
+        ws = open_sheet()
+        all_values = ws.get_all_values()
+        if not all_values:
+            sys.exit("Sheet is empty - needs at least a header row.")
+        headers = all_values[0]
+        validate_headers(headers)
+
+        existing = get_existing_briefs(ws, headers)
+        print(f"Found {len(existing)} existing brief(s) in the sheet (using last 30 for de-dup context).")
+
+        print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
+        briefs = claude_generate(existing, args.count)
+        print(f"Generated {len(briefs)} briefs.\n")
+
+        for i, b in enumerate(briefs, 1):
+            print(f"--- Brief {i} ({len(b)} chars) ---")
+            print(b)
+            print()
+
+        if args.dry_run:
+            print("[dry-run] Not writing to sheet.")
+            return
+
+        n = append_to_sheet(ws, headers, briefs)
+        print(f"Appended {n} new Queued briefs to '{ws.title}'.")
 
 
 if __name__ == "__main__":
