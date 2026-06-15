@@ -333,91 +333,67 @@ def claude_generate(existing_briefs, count, settings=None):
 
     # Handle both string briefs and object briefs
     # If Claude returned objects (dicts), convert them to strings
+    print("=" * 50, flush=True)
+    print("STARTING PROCESSING LOOP", flush=True)
+    print(f"briefs list has {len(briefs)} items", flush=True)
+    print("=" * 50, flush=True)
+    sys.stdout.flush()
+
     processed = []
-    sys.stdout.flush()  # Ensure previous output is visible
 
     for idx, item in enumerate(briefs):
-        try:
-            print(f"   Processing item {idx}: type={type(item).__name__}", flush=True)
+        print(f"--- LOOP ITERATION {idx} ---", flush=True)
+        item_type = type(item).__name__
+        print(f"Item type: {item_type}", flush=True)
 
-            if isinstance(item, str) and item.strip():
-                processed.append(item.strip())
-                print(f"      -> Added as string ({len(item)} chars)", flush=True)
+        try:
+            if isinstance(item, str):
+                if item.strip():
+                    processed.append(item.strip())
+                    print(f"Added string brief ({len(item)} chars)", flush=True)
+                else:
+                    print("Skipped empty string", flush=True)
 
             elif isinstance(item, dict):
-                print(f"      -> Dict with {len(item)} keys: {list(item.keys())}", flush=True)
-                brief_text = None
+                print(f"Processing dict with keys: {list(item.keys())}", flush=True)
 
-                # Check for content-like fields first (in priority order)
-                content_keys = ['brief', 'content', 'description', 'summary', 'text', 'body']
-                for key in content_keys:
-                    if key in item and item[key]:
-                        brief_text = str(item[key]).strip()
-                        print(f"      -> Found content in '{key}' field ({len(brief_text)} chars)", flush=True)
-                        break
+                # Simple approach: just format all dict fields
+                parts = []
+                for key, value in item.items():
+                    if value:
+                        if isinstance(value, list):
+                            value = ", ".join(str(v) for v in value)
+                        nice_key = key.replace('_', ' ').title()
+                        parts.append(f"{nice_key}: {value}")
+                        print(f"  Added field: {nice_key}", flush=True)
 
-                # If no content field found, format ALL fields as a structured brief
-                if not brief_text:
-                    print(f"      -> No content field, formatting all fields", flush=True)
-                    parts = []
-
-                    # Define preferred order for common brief fields
-                    preferred_order = ['title', 'audience', 'target_audience', 'angle', 'thesis',
-                                       'sections', 'subtopics', 'sub_topics', 'cover',
-                                       'examples', 'case_studies', 'companies', 'references',
-                                       'seo_keywords', 'seo_targets', 'keywords',
-                                       'cta', 'cta_hook', 'close', 'closing', 'notes']
-
-                    # Process fields in preferred order first
-                    seen_keys = set()
-                    for key in preferred_order:
-                        if key in item and item[key]:
-                            seen_keys.add(key)
-                            value = item[key]
-                            if isinstance(value, list):
-                                value = ", ".join(str(v) for v in value)
-                            nice_key = key.replace('_', ' ').title()
-                            parts.append(f"{nice_key}: {value}")
-
-                    # Then add any remaining keys not in preferred order
-                    for key, value in item.items():
-                        if key not in seen_keys and value:
-                            if isinstance(value, list):
-                                value = ", ".join(str(v) for v in value)
-                            nice_key = key.replace('_', ' ').title()
-                            parts.append(f"{nice_key}: {value}")
-
-                    if parts:
-                        if len(parts) > 3:
-                            brief_text = "\n".join(parts)
-                        else:
-                            brief_text = " | ".join(parts)
-                        print(f"      -> Formatted {len(parts)} parts, {len(brief_text)} chars", flush=True)
-                    else:
-                        # Last resort: just stringify the whole dict as JSON
-                        print(f"      -> No usable fields, using JSON fallback", flush=True)
-                        brief_text = json.dumps(item, ensure_ascii=False, indent=2)
-
-                if brief_text and brief_text.strip():
-                    processed.append(brief_text.strip())
-                    print(f"      -> SUCCESS: Added brief ({len(brief_text)} chars)", flush=True)
+                if parts:
+                    brief_text = "\n".join(parts)
+                    processed.append(brief_text)
+                    print(f"SUCCESS: Created brief with {len(parts)} fields, {len(brief_text)} chars", flush=True)
                 else:
-                    print(f"      -> FAILED: brief_text is empty", flush=True)
+                    # Fallback: JSON stringify
+                    brief_text = json.dumps(item, ensure_ascii=False)
+                    processed.append(brief_text)
+                    print(f"Fallback: JSON stringified ({len(brief_text)} chars)", flush=True)
             else:
-                print(f"      -> Skipped (not string or dict)", flush=True)
+                print(f"Skipped unknown type: {item_type}", flush=True)
 
         except Exception as e:
-            print(f"      -> ERROR processing item {idx}: {e}", flush=True)
-            # Try to salvage by just stringifying the item
+            print(f"EXCEPTION in processing: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            # Try to salvage
             try:
-                fallback = str(item) if not isinstance(item, dict) else json.dumps(item, ensure_ascii=False)
-                if fallback.strip():
-                    processed.append(fallback.strip())
-                    print(f"      -> Salvaged via fallback ({len(fallback)} chars)", flush=True)
-            except:
-                pass
+                fallback = json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item)
+                processed.append(fallback)
+                print(f"Salvaged via exception handler ({len(fallback)} chars)", flush=True)
+            except Exception as e2:
+                print(f"Salvage also failed: {e2}", flush=True)
 
-    print(f"   Total processed: {len(processed)} briefs", flush=True)
+    print("=" * 50, flush=True)
+    print(f"PROCESSING COMPLETE: {len(processed)} briefs", flush=True)
+    print("=" * 50, flush=True)
     return processed
 
 
