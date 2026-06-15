@@ -71,6 +71,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 # API client (lazy import)
 _api_client = None
+_cached_settings = None
 
 
 def _get_api_client():
@@ -80,6 +81,24 @@ def _get_api_client():
         from api_client import BlogPipelineAPI
         _api_client = BlogPipelineAPI()
     return _api_client
+
+
+def _get_settings():
+    """Fetch settings from the API (cached)."""
+    global _cached_settings
+    if _cached_settings is None:
+        api = _get_api_client()
+        _cached_settings = {}
+        # Fetch all known settings
+        for key in ['briefs_prompt', 'cta_ratio', 'brief_min_length', 'brief_max_length',
+                    'topic_areas', 'avoid_list', 'search_queries', 'brief_requirements']:
+            try:
+                value = api.get_setting(key)
+                if value is not None:
+                    _cached_settings[key] = value
+            except Exception as e:
+                print(f"   Warning: Could not fetch setting '{key}': {e}")
+    return _cached_settings
 
 
 def _load_gspread():
@@ -184,19 +203,36 @@ def get_existing_briefs(ws, headers, limit=30):
     return existing[-limit:]
 
 
-def claude_generate(existing_briefs, count):
+def claude_generate(existing_briefs, count, settings=None):
+    """Generate briefs using Claude with optional settings override."""
     if not ANTHROPIC_KEY:
         sys.exit("ANTHROPIC_API_KEY is not set.")
+
+    settings = settings or {}
     existing_block = "\n".join(f"- {b}" for b in existing_briefs) or "(none yet — this is the first batch)"
-    # 60% of briefs get a CTA hook; 40% end with a non-sales editorial close.
-    cta_count = round(count * 0.6)
+
+    # Get CTA ratio from settings or use default (0.6)
+    cta_ratio = float(settings.get('cta_ratio', '0.6'))
+    cta_count = round(count * cta_ratio)
     non_cta_count = count - cta_count
-    print(f"   Target CTA distribution: {cta_count} with CTA, {non_cta_count} without")
-    prompt = BRIEFS_PROMPT.format(
+    print(f"   CTA ratio: {cta_ratio} ({cta_count} with CTA, {non_cta_count} without)")
+
+    # Get prompt template from settings or use default
+    prompt_template = settings.get('briefs_prompt', BRIEFS_PROMPT)
+
+    # Build the prompt with all available variables
+    prompt = prompt_template.format(
         count=count,
         cta_count=cta_count,
         non_cta_count=non_cta_count,
         existing_briefs=existing_block,
+        # Additional settings that may be in the template
+        brief_min_length=settings.get('brief_min_length', '100'),
+        brief_max_length=settings.get('brief_max_length', '180'),
+        topic_areas=settings.get('topic_areas', ''),
+        avoid_list=settings.get('avoid_list', ''),
+        search_queries=settings.get('search_queries', ''),
+        brief_requirements=settings.get('brief_requirements', ''),
     )
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
@@ -303,13 +339,21 @@ def main():
         print("Using REST API backend...")
         api = _get_api_client()
 
+        # Fetch settings from API
+        print("Fetching settings from API...")
+        settings = _get_settings()
+        if settings:
+            print(f"   Loaded {len(settings)} setting(s): {', '.join(settings.keys())}")
+        else:
+            print("   No custom settings found, using defaults.")
+
         # Get existing briefs via API
         print("Fetching existing briefs from API...")
         existing = api.get_existing_briefs(limit=30)
         print(f"Found {len(existing)} existing brief(s) (using last 30 for de-dup context).")
 
         print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-        briefs = claude_generate(existing, args.count)
+        briefs = claude_generate(existing, args.count, settings=settings)
         print(f"Generated {len(briefs)} briefs.\n")
 
         for i, b in enumerate(briefs, 1):
