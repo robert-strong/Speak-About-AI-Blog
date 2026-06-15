@@ -220,24 +220,35 @@ def claude_generate(existing_briefs, count, settings=None):
     print(f"   CTA ratio: {cta_ratio} ({cta_count} with CTA, {non_cta_count} without)")
 
     # Get prompt template from settings or use default
-    prompt_template = settings.get('briefs_prompt', BRIEFS_PROMPT)
+    prompt_template = settings.get('briefs_prompt') or BRIEFS_PROMPT
 
-    # Build the prompt with all available variables
-    prompt = prompt_template.format(
-        count=count,
-        cta_count=cta_count,
-        non_cta_count=non_cta_count,
-        existing_briefs=existing_block,
-        # Additional settings that may be in the template (keys match admin UI)
-        brief_length_min=settings.get('brief_length_min', '100'),
-        brief_length_max=settings.get('brief_length_max', '180'),
-        article_length_min=settings.get('article_length_min', '1500'),
-        article_length_max=settings.get('article_length_max', '1800'),
-        topic_areas=settings.get('topic_areas', ''),
-        avoid_list=settings.get('avoid_list', ''),
-        search_queries=settings.get('search_queries', ''),
-        brief_requirements=settings.get('brief_requirements', ''),
-    )
+    # If the custom prompt is empty or whitespace, fall back to default
+    if not prompt_template.strip():
+        print("   Warning: Custom prompt is empty, using default prompt")
+        prompt_template = BRIEFS_PROMPT
+
+    # Build the substitution dictionary
+    subs = {
+        'count': count,
+        'cta_count': cta_count,
+        'non_cta_count': non_cta_count,
+        'existing_briefs': existing_block,
+        'brief_length_min': settings.get('brief_length_min', '100'),
+        'brief_length_max': settings.get('brief_length_max', '180'),
+        'article_length_min': settings.get('article_length_min', '1500'),
+        'article_length_max': settings.get('article_length_max', '1800'),
+        'topic_areas': settings.get('topic_areas', ''),
+        'avoid_list': settings.get('avoid_list', ''),
+        'search_queries': settings.get('search_queries', ''),
+        'brief_requirements': settings.get('brief_requirements', ''),
+    }
+
+    # Try to format the prompt, falling back to default if there's an error
+    try:
+        prompt = prompt_template.format(**subs)
+    except KeyError as e:
+        print(f"   Warning: Prompt template has unknown variable {e}, using default prompt")
+        prompt = BRIEFS_PROMPT.format(**subs)
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -299,6 +310,14 @@ def claude_generate(existing_briefs, count, settings=None):
 
     if not isinstance(briefs, list):
         sys.exit(f"Expected JSON array; got {type(briefs).__name__}")
+
+    # Debug: show what we got before filtering
+    print(f"   Raw parsed array has {len(briefs)} items")
+    for i, item in enumerate(briefs):
+        item_type = type(item).__name__
+        preview = str(item)[:100] if item else "(empty)"
+        print(f"      [{i}] ({item_type}): {preview}...")
+
     briefs = [b.strip() for b in briefs if isinstance(b, str) and b.strip()]
     return briefs
 
@@ -359,6 +378,11 @@ def main():
         print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
         briefs = claude_generate(existing, args.count, settings=settings)
         print(f"Generated {len(briefs)} briefs.\n")
+
+        if not briefs:
+            print("WARNING: No briefs were generated. Check if the prompt template is valid.")
+            print("The prompt may have formatting issues or Claude may have returned invalid JSON.")
+            sys.exit(1)
 
         for i, b in enumerate(briefs, 1):
             print(f"--- Brief {i} ({len(b)} chars) ---")
