@@ -634,13 +634,13 @@ def is_eligible_api(item):
     brief = (item.get("brief") or "").strip()
     if status != "queued" or not brief:
         return False
-    if item.get("contentful_entry_url", "").strip():
+    if (item.get("contentful_entry_url") or "").strip():
         return False  # already published
     # Check if body content exists
-    if item.get("body_content", "").strip():
+    if (item.get("body_content") or "").strip():
         # Has body, check if other fields are missing
         for field in ("title", "excerpt", "meta_description", "image_prompt", "category"):
-            if not item.get(field, "").strip():
+            if not (item.get(field) or "").strip():
                 return True
         return False
     return True
@@ -662,12 +662,12 @@ def process_item_api(api, item, dry_run=False):
         plan = []
         if not title_existing: plan.append("Title")
         plan.append("Body")
-        if not item.get("excerpt", "").strip(): plan.append("Excerpt")
-        if not item.get("meta_description", "").strip(): plan.append("Meta Description")
-        if not item.get("image_prompt", "").strip(): plan.append("Image Prompt")
-        if not item.get("category", "").strip(): plan.append("Category")
+        if not (item.get("excerpt") or "").strip(): plan.append("Excerpt")
+        if not (item.get("meta_description") or "").strip(): plan.append("Meta Description")
+        if not (item.get("image_prompt") or "").strip(): plan.append("Image Prompt")
+        if not (item.get("category") or "").strip(): plan.append("Category")
         if not item.get("tags"): plan.append("Tags")
-        if not item.get("seo_keywords", "").strip(): plan.append("SEO Keywords")
+        if not (item.get("seo_keywords") or "").strip(): plan.append("SEO Keywords")
         print(f"  Would generate: {', '.join(plan)}")
         return True
 
@@ -703,28 +703,28 @@ def process_item_api(api, item, dry_run=False):
             api.update_item(item_id, body_content=body)
 
         # 3. Excerpt (if missing)
-        if not item.get("excerpt", "").strip():
+        if not (item.get("excerpt") or "").strip():
             print("  -> Generating excerpt...")
             excerpt = draft_excerpt(body)
             print(f"     {excerpt}")
             api.update_item(item_id, excerpt=excerpt)
 
         # 4. Meta description (if missing)
-        if not item.get("meta_description", "").strip():
+        if not (item.get("meta_description") or "").strip():
             print("  -> Generating meta description...")
             meta = draft_meta(body)
             print(f"     ({len(meta)} chars) {meta}")
             api.update_item(item_id, meta_description=meta)
 
         # 5. Image prompt (if missing)
-        if not item.get("image_prompt", "").strip():
+        if not (item.get("image_prompt") or "").strip():
             print("  -> Generating image prompt...")
             img = draft_image_prompt(title, brief)
             print(f"     {img}")
             api.update_item(item_id, image_prompt=img)
 
         # 6. Category (if missing)
-        if not item.get("category", "").strip():
+        if not (item.get("category") or "").strip():
             print("  -> Picking category...")
             cat = draft_category(title, brief)
             print(f"     {cat}")
@@ -740,7 +740,7 @@ def process_item_api(api, item, dry_run=False):
             api.update_item(item_id, tags=tags_list)
 
         # 8. SEO keywords (if missing)
-        if not item.get("seo_keywords", "").strip():
+        if not (item.get("seo_keywords") or "").strip():
             print("  -> Generating SEO keywords...")
             seo = draft_seo(title, brief)
             print(f"     {seo}")
