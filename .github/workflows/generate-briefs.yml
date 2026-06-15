@@ -8,7 +8,13 @@ on:
     # have ~3-4 weeks to review/edit before the publishing pipeline fires
     # on the last Monday of the month.
     - cron: '23 4 1 * *'
-  workflow_dispatch:  # adds a "Run workflow" button for ad-hoc brief generation
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Number of briefs to generate'
+        required: false
+        default: '5'
+        type: string
 
 jobs:
   generate:
@@ -31,21 +37,26 @@ jobs:
       - name: Restore service account JSON from secret
         run: |
           if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON repo secret is missing or empty."
-            exit 1
+            echo "::warning::GOOGLE_SERVICE_ACCOUNT_JSON not set, skipping sheet fallback setup"
+          else
+            printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+            python -c "import json; json.load(open('service_account.json'))" || {
+              echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON."
+              exit 1
+            }
           fi
-          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
-          python -c "import json; json.load(open('service_account.json'))" || {
-            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON."
-            exit 1
-          }
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
       - name: Generate briefs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # REST API backend (preferred)
+          USE_BLOG_API: ${{ vars.USE_BLOG_API || 'true' }}
+          BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
+          BLOG_PIPELINE_API_KEY: ${{ secrets.BLOG_PIPELINE_API_KEY }}
+          # Legacy Google Sheets backend (fallback)
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEET_WORKSHEET: '2026'
           GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
-        run: python generate_briefs.py --count 5
+        run: python generate_briefs.py --count ${{ github.event.inputs.count || '5' }}
