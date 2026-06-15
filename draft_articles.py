@@ -68,6 +68,7 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 # API client (lazy import)
 _api_client = None
+_cached_settings = None
 
 
 def _get_api_client():
@@ -77,6 +78,25 @@ def _get_api_client():
         from api_client import BlogPipelineAPI
         _api_client = BlogPipelineAPI()
     return _api_client
+
+
+def _get_settings():
+    """Fetch draft settings from the API (cached)."""
+    global _cached_settings
+    if _cached_settings is None and USE_BLOG_API:
+        api = _get_api_client()
+        _cached_settings = {}
+        # Fetch all draft-related settings
+        for key in ['article_length_min', 'article_length_max',
+                    'draft_body_prompt', 'draft_formatting_rules',
+                    'draft_tone', 'draft_avoid_phrases']:
+            try:
+                value = api.get_setting(key)
+                if value is not None:
+                    _cached_settings[key] = value
+            except Exception as e:
+                print(f"   Warning: Could not fetch setting '{key}': {e}")
+    return _cached_settings or {}
 
 
 def _load_gspread():
@@ -205,7 +225,7 @@ Brief:
 {brief}
 """
 
-BODY_PROMPT = """You are a senior content writer for Speak About AI, a premier AI keynote speakers bureau.
+DEFAULT_BODY_PROMPT = """You are a senior content writer for Speak About AI, a premier AI keynote speakers bureau.
 Write a complete blog post in markdown format based on the title and brief below.
 
 Title: {title}
@@ -214,25 +234,52 @@ Brief:
 {brief}
 
 Requirements:
-- Length: ~1200-1800 words
+- Length: ~{article_length_min}-{article_length_max} words
 - Use markdown ## for major sections (and ### for sub-sections if needed)
 - Do NOT include the title as an H1 — start with an opening paragraph that hooks the reader
-- Conversational but professional tone, like a knowledgeable colleague writing for event planners and business leaders
+- Tone: {tone}
 - Include concrete examples and specific actionable advice; avoid generic AI-thought-leadership filler
-- No "In this article we will..." or "In conclusion..." style filler — just substantive content from the first sentence
 - Use bold (**text**) sparingly to emphasize the most important takeaways
 - Output the markdown body only — no preamble, no closing remarks, no meta-commentary
 
+Phrases to AVOID:
+{avoid_phrases}
+
 IMPORTANT — Formatting constraints:
-- Do NOT use horizontal rules (---) to separate sections. Use headings (## or ###) instead for visual breaks.
-- Do NOT use em-dashes (—) or en-dashes (–) in sentences. Restructure sentences to flow naturally without dashes.
-  BAD: "The keynote — which lasted two hours — covered AI trends."
-  GOOD: "The two-hour keynote covered AI trends."
-  BAD: "AI adoption is accelerating — and companies need to adapt."
-  GOOD: "AI adoption is accelerating, and companies need to adapt."
-- Prefer commas, periods, or restructured clauses over parenthetical dash constructions.
-- Hyphenated compound words are fine (e.g., "decision-makers", "real-world", "AI-powered").
+{formatting_rules}
 """
+
+
+def _build_body_prompt(title, brief, settings=None):
+    """Build the body prompt using settings or defaults."""
+    settings = settings or {}
+
+    # Check for custom prompt override
+    custom_prompt = settings.get('draft_body_prompt', '').strip()
+    if custom_prompt:
+        prompt_template = custom_prompt
+    else:
+        prompt_template = DEFAULT_BODY_PROMPT
+
+    # Build substitution values
+    subs = {
+        'title': title,
+        'brief': brief,
+        'article_length_min': settings.get('article_length_min', '1200'),
+        'article_length_max': settings.get('article_length_max', '1800'),
+        'tone': settings.get('draft_tone', 'Conversational but professional, like a knowledgeable colleague writing for event planners and business leaders'),
+        'avoid_phrases': settings.get('draft_avoid_phrases', '"In this article we will..."\n"In conclusion..."\nGeneric AI-thought-leadership filler'),
+        'formatting_rules': settings.get('draft_formatting_rules', '''Do NOT use horizontal rules (---) to separate sections. Use headings (## or ###) instead for visual breaks.
+Do NOT use em-dashes (—) or en-dashes (–) in sentences. Restructure sentences to flow naturally without dashes.
+Prefer commas, periods, or restructured clauses over parenthetical dash constructions.
+Hyphenated compound words are fine (e.g., "decision-makers", "real-world", "AI-powered").'''),
+    }
+
+    try:
+        return prompt_template.format(**subs)
+    except KeyError as e:
+        print(f"   Warning: Prompt template has unknown variable {e}, using defaults")
+        return DEFAULT_BODY_PROMPT.format(**subs)
 
 EXCERPT_PROMPT = """Write a single-sentence excerpt (15-25 words) summarizing the article below for a blog post listing page.
 Make it engaging and concrete, not generic.
@@ -330,9 +377,10 @@ def draft_title(brief):
     return _strip_quotes(out)
 
 
-def draft_body(title, brief):
-    out = claude_text(BODY_PROMPT.format(title=title, brief=brief),
-                      max_tokens=4096, temperature=0.7, model=BODY_MODEL)
+def draft_body(title, brief, settings=None):
+    settings = settings if settings is not None else _get_settings()
+    prompt = _build_body_prompt(title, brief, settings)
+    out = claude_text(prompt, max_tokens=4096, temperature=0.7, model=BODY_MODEL)
     out = re.sub(r"^#\s+.+\n+", "", out, count=1)
     return out.strip()
 
@@ -781,6 +829,14 @@ def main():
         # REST API backend
         print("Using REST API backend...")
         api = _get_api_client()
+
+        # Load draft settings from API
+        print("Fetching draft settings from API...")
+        settings = _get_settings()
+        if settings:
+            print(f"   Loaded {len(settings)} setting(s): {', '.join(settings.keys())}")
+        else:
+            print("   No custom settings found, using defaults.")
 
         print("Fetching queued items from API...")
         items = api.get_queued_items()
