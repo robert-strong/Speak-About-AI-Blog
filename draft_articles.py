@@ -222,6 +222,16 @@ Requirements:
 - No "In this article we will..." or "In conclusion..." style filler — just substantive content from the first sentence
 - Use bold (**text**) sparingly to emphasize the most important takeaways
 - Output the markdown body only — no preamble, no closing remarks, no meta-commentary
+
+IMPORTANT — Formatting constraints:
+- Do NOT use horizontal rules (---) to separate sections. Use headings (## or ###) instead for visual breaks.
+- Do NOT use em-dashes (—) or en-dashes (–) in sentences. Restructure sentences to flow naturally without dashes.
+  BAD: "The keynote — which lasted two hours — covered AI trends."
+  GOOD: "The two-hour keynote covered AI trends."
+  BAD: "AI adoption is accelerating — and companies need to adapt."
+  GOOD: "AI adoption is accelerating, and companies need to adapt."
+- Prefer commas, periods, or restructured clauses over parenthetical dash constructions.
+- Hyphenated compound words are fine (e.g., "decision-makers", "real-world", "AI-powered").
 """
 
 EXCERPT_PROMPT = """Write a single-sentence excerpt (15-25 words) summarizing the article below for a blog post listing page.
