@@ -93,7 +93,8 @@ def _get_settings():
         for key in ['briefs_prompt', 'cta_ratio', 'default_brief_count',
                     'brief_length_min', 'brief_length_max',
                     'article_length_min', 'article_length_max',
-                    'topic_areas', 'avoid_list', 'search_queries', 'brief_requirements']:
+                    'topic_areas', 'avoid_list', 'search_queries', 'brief_requirements',
+                    'enable_web_search', 'max_web_searches']:
             try:
                 value = api.get_setting(key)
                 if value is not None:
@@ -249,6 +250,30 @@ def claude_generate(existing_briefs, count, settings=None):
     except KeyError as e:
         print(f"   Warning: Prompt template has unknown variable {e}, using default prompt")
         prompt = BRIEFS_PROMPT.format(**subs)
+
+    # Determine whether to enable web search and how many searches to allow
+    enable_web_search = settings.get('enable_web_search', 'true').lower() in ('true', '1', 'yes')
+    max_web_searches = int(settings.get('max_web_searches', '5'))
+    print(f"   Web search: {'enabled' if enable_web_search else 'disabled'} (max {max_web_searches})")
+
+    # Build request payload
+    request_json = {
+        "model": TEXT_MODEL,
+        "max_tokens": 8192,
+        "temperature": 0.85,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    # Only add web search tool if enabled
+    if enable_web_search and max_web_searches > 0:
+        request_json["tools"] = [{
+            # Server-side web search; Anthropic runs the searches
+            # transparently and returns them as content blocks alongside text.
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": max_web_searches,
+        }]
+
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -256,19 +281,7 @@ def claude_generate(existing_briefs, count, settings=None):
             "anthropic-version": ANTHROPIC_VERSION,
             "content-type": "application/json",
         },
-        json={
-            "model": TEXT_MODEL,
-            "max_tokens": 8192,
-            "temperature": 0.85,
-            "tools": [{
-                # Server-side web search; Anthropic runs the searches
-                # transparently and returns them as content blocks alongside text.
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": 5,
-            }],
-            "messages": [{"role": "user", "content": prompt}],
-        },
+        json=request_json,
         timeout=240,
     )
     if not r.ok:
@@ -329,36 +342,67 @@ def claude_generate(existing_briefs, count, settings=None):
         elif isinstance(item, dict):
             print(f"      -> Dict with keys: {list(item.keys())}")
             # Convert dict to a formatted brief string
-            # Try common field names for the brief content
+            # Try common field names for the brief content (in priority order)
             brief_text = None
 
-            # Check for a 'brief' or 'content' field first
-            for key in ['brief', 'content', 'description', 'summary', 'text']:
+            # Check for content-like fields first
+            content_keys = ['brief', 'content', 'description', 'summary', 'text', 'body']
+            for key in content_keys:
                 if key in item and item[key]:
                     brief_text = str(item[key]).strip()
-                    print(f"      -> Found content in '{key}' field")
+                    print(f"      -> Found content in '{key}' field ({len(brief_text)} chars)")
                     break
 
-            # If no content field, format all fields as a structured brief
+            # If no content field found, format ALL fields as a structured brief
+            # This handles cases where Claude returns structured data like:
+            # {"title": "...", "audience": "...", "angle": "...", "seo_targets": [...]}
             if not brief_text:
-                print(f"      -> No content field found, formatting all {len(item)} fields")
+                print(f"      -> No content field found, formatting all {len(item)} fields as structured brief")
                 parts = []
-                for key, value in item.items():
-                    if value:
+
+                # Define preferred order for common brief fields
+                preferred_order = ['title', 'audience', 'angle', 'thesis', 'sections', 'subtopics',
+                                   'examples', 'case_studies', 'companies', 'seo_keywords',
+                                   'seo_targets', 'keywords', 'cta', 'cta_hook', 'close', 'notes']
+
+                # Process fields in preferred order first
+                seen_keys = set()
+                for key in preferred_order:
+                    if key in item and item[key]:
+                        seen_keys.add(key)
+                        value = item[key]
                         # Format arrays as comma-separated
                         if isinstance(value, list):
                             value = ", ".join(str(v) for v in value)
-                        parts.append(f"{key.replace('_', ' ').title()}: {value}")
-                brief_text = " | ".join(parts)
-                print(f"      -> Formatted brief has {len(parts)} parts, {len(brief_text)} chars")
+                        # Capitalize key nicely
+                        nice_key = key.replace('_', ' ').title()
+                        parts.append(f"{nice_key}: {value}")
 
-            if brief_text:
-                processed.append(brief_text)
+                # Then add any remaining keys not in preferred order
+                for key, value in item.items():
+                    if key not in seen_keys and value:
+                        if isinstance(value, list):
+                            value = ", ".join(str(v) for v in value)
+                        nice_key = key.replace('_', ' ').title()
+                        parts.append(f"{nice_key}: {value}")
+
+                if parts:
+                    # Use newlines for readability when there are many fields
+                    if len(parts) > 3:
+                        brief_text = "\n".join(parts)
+                    else:
+                        brief_text = " | ".join(parts)
+                    print(f"      -> Formatted brief has {len(parts)} parts, {len(brief_text)} chars")
+                else:
+                    print(f"      -> WARNING: Dict has no usable fields")
+
+            if brief_text and brief_text.strip():
+                processed.append(brief_text.strip())
                 print(f"      -> SUCCESS: Added brief ({len(brief_text)} chars)")
             else:
-                print(f"      -> FAILED: brief_text is empty")
+                print(f"      -> FAILED: brief_text is empty or whitespace")
         else:
-            print(f"      -> Skipped (not string or dict)")
+            print(f"      -> Skipped (not string or dict, or empty string)")
 
     print(f"   Total processed: {len(processed)} briefs")
     return processed
