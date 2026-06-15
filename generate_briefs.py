@@ -89,8 +89,10 @@ def _get_settings():
     if _cached_settings is None:
         api = _get_api_client()
         _cached_settings = {}
-        # Fetch all known settings
-        for key in ['briefs_prompt', 'cta_ratio', 'brief_min_length', 'brief_max_length',
+        # Fetch all known settings (keys match admin UI)
+        for key in ['briefs_prompt', 'cta_ratio', 'default_brief_count',
+                    'brief_length_min', 'brief_length_max',
+                    'article_length_min', 'article_length_max',
                     'topic_areas', 'avoid_list', 'search_queries', 'brief_requirements']:
             try:
                 value = api.get_setting(key)
@@ -226,9 +228,11 @@ def claude_generate(existing_briefs, count, settings=None):
         cta_count=cta_count,
         non_cta_count=non_cta_count,
         existing_briefs=existing_block,
-        # Additional settings that may be in the template
-        brief_min_length=settings.get('brief_min_length', '100'),
-        brief_max_length=settings.get('brief_max_length', '180'),
+        # Additional settings that may be in the template (keys match admin UI)
+        brief_length_min=settings.get('brief_length_min', '100'),
+        brief_length_max=settings.get('brief_length_max', '180'),
+        article_length_min=settings.get('article_length_min', '1500'),
+        article_length_max=settings.get('article_length_max', '1800'),
         topic_areas=settings.get('topic_areas', ''),
         avoid_list=settings.get('avoid_list', ''),
         search_queries=settings.get('search_queries', ''),
