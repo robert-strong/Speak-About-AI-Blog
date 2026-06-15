@@ -37,10 +37,12 @@ jobs:
 
       - name: Publish to Contentful
         env:
-          # Contentful
+          # Contentful (create_blog_entry.py expects CONTENTFUL_CMA_TOKEN)
+          CONTENTFUL_CMA_TOKEN: ${{ secrets.CONTENTFUL_CMA_TOKEN }}
           CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
           CONTENTFUL_ENVIRONMENT: ${{ secrets.CONTENTFUL_ENVIRONMENT || 'master' }}
-          CONTENTFUL_MANAGEMENT_TOKEN: ${{ secrets.CONTENTFUL_MANAGEMENT_TOKEN }}
+          # Image generation
+          GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
           # REST API backend (preferred)
           USE_BLOG_API: ${{ vars.USE_BLOG_API || 'true' }}
           BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
