@@ -321,10 +321,13 @@ def claude_generate(existing_briefs, count, settings=None):
     # Handle both string briefs and object briefs
     # If Claude returned objects (dicts), convert them to strings
     processed = []
-    for item in briefs:
+    for idx, item in enumerate(briefs):
+        print(f"   Processing item {idx}: type={type(item).__name__}")
         if isinstance(item, str) and item.strip():
             processed.append(item.strip())
+            print(f"      -> Added as string ({len(item)} chars)")
         elif isinstance(item, dict):
+            print(f"      -> Dict with keys: {list(item.keys())}")
             # Convert dict to a formatted brief string
             # Try common field names for the brief content
             brief_text = None
@@ -333,10 +336,12 @@ def claude_generate(existing_briefs, count, settings=None):
             for key in ['brief', 'content', 'description', 'summary', 'text']:
                 if key in item and item[key]:
                     brief_text = str(item[key]).strip()
+                    print(f"      -> Found content in '{key}' field")
                     break
 
             # If no content field, format all fields as a structured brief
             if not brief_text:
+                print(f"      -> No content field found, formatting all {len(item)} fields")
                 parts = []
                 for key, value in item.items():
                     if value:
@@ -345,11 +350,17 @@ def claude_generate(existing_briefs, count, settings=None):
                             value = ", ".join(str(v) for v in value)
                         parts.append(f"{key.replace('_', ' ').title()}: {value}")
                 brief_text = " | ".join(parts)
+                print(f"      -> Formatted brief has {len(parts)} parts, {len(brief_text)} chars")
 
             if brief_text:
                 processed.append(brief_text)
-                print(f"   Converted dict to brief string ({len(brief_text)} chars)")
+                print(f"      -> SUCCESS: Added brief ({len(brief_text)} chars)")
+            else:
+                print(f"      -> FAILED: brief_text is empty")
+        else:
+            print(f"      -> Skipped (not string or dict)")
 
+    print(f"   Total processed: {len(processed)} briefs")
     return processed
 
 
