@@ -1,1 +1,16 @@
-Photographic style, NOT illustration or 3D render. Professional corporate event setting that fits the topic: conference hall, keynote stage, business audience, or tradeshow floor. Bright, even ambient lighting; shallow depth of field; documentary candid composition with real people and real spaces. Defining brand element: a large deep corporate-navy-blue (#1A4480) presentation backdrop, banner, or signage prominently in the scene, with the post's display title rendered on it in bold white sans-serif uppercase letters, well-kerned and clearly legible. The text on the backdrop is the focal element — the rest of the scene is supporting context. Supporting details where they fit naturally: potted greenery, wooden podium, microphone, audience seating, conference signage. Tone is warm and professional, not stiff or 
+Photographic style, NOT illustration or 3D render. Documentary, naturalistic feel with real people in real environments. No AI-portrait close-up faces.
+
+The scene should match the specific topic of the article and vary widely across posts. Examples of suitable scenes depending on the topic:
+- AI keynote / event topics → speaker on stage, conference audience, panel discussion
+- AI in industry verticals → people working in the relevant setting (medical team in a hospital, engineers in a lab, factory floor, retail store, financial trading desk, classroom, etc.)
+- AI tools / technology / product topics → people interacting with screens, dashboards, data visualizations, robotics, interfaces, devices
+- AI strategy / leadership topics → executives in a boardroom mid-discussion, whiteboarding session, strategy off-site
+- AI research / breakthroughs → researchers at workstations, data center, lab equipment, code on monitors
+- AI ethics / policy topics → diverse roundtable, congressional-style setting, university lecture, journalists at a press event
+- General business / marketing / sales → open-plan office, team huddle, customer-facing scene
+
+Lighting: bright, even, natural daylight or warm interior lighting. Shallow depth of field where appropriate. Warm professional tone — never sterile, stiff, or stock-photo cliche. Avoid generic business-handshake compositions.
+
+Recurring brand element: a deep corporate-navy-blue (#1A4480) surface visible somewhere in the scene with the post's display title rendered on it in bold white sans-serif uppercase letters — well-kerned and clearly legible. This navy surface can be context-appropriate to the scene: a presentation backdrop, a digital sign, a wall display, a laptop or monitor screen, a banner, a poster, a building lobby sign, an event lanyard backdrop, etc. It does NOT need to dominate the image — the actual subject/activity is the focal point and the navy element is supporting brand context.
+
+Avoid: cartoon or illustrated styles, 3D renders, uncanny AI-portrait close-up faces, heavy filters, dramatic high contrast, surreal compositions, lens flares, lazy stock-photo handshakes, repetitive podium-and-audience compositions, and any rendered text other than the display title on the navy element.

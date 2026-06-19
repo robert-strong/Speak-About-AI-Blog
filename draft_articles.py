@@ -301,15 +301,24 @@ Article:
 {body}
 """
 
-IMAGE_PROMPT_PROMPT = """Suggest a visual subject for the hero image of this blog post.
-The image will be a documentary-style photograph of a corporate event scene with a navy stage backdrop. The backdrop and brand styling are handled separately.
+IMAGE_PROMPT_PROMPT = """Suggest a visual subject for the hero image of this blog post. The image is a documentary-style photograph; brand styling (a navy element with the post's title rendered on it) is added separately by the style guide.
 
-Describe ONLY the human subject and composition in 1-2 short sentences.
-Examples:
-  "A keynote speaker mid-presentation gesturing toward the audience, with attendees visible in the foreground."
-  "A panel of business leaders seated on a conference stage, mid-discussion, microphones in hand."
+Pick a scene that VISUALLY MATCHES THE SPECIFIC TOPIC of this article. STRONG VARIETY across posts is desirable — do NOT default to a "speaker at a podium" or "panel on a stage" scene unless the article is genuinely about hiring/booking a keynote speaker. Most AI topics are not about speakers.
 
-Do NOT mention the navy backdrop, color palette, lighting, or any text — those are handled by the style guide.
+Examples by topic flavor:
+- Article about hiring keynote speakers, event planning, or speaker bureaus → a keynote speaker mid-presentation, or attendees at a conference, or a panel discussion
+- Article about AI in healthcare → a medical team reviewing data on screens in a modern hospital
+- Article about AI in sales / revenue → sales reps in an open-plan office collaborating around a laptop, or a team huddled around a CRM dashboard
+- Article about AI ethics or policy → executives in a boardroom mid-discussion, or a diverse roundtable around a conference table
+- Article about AI in manufacturing → an engineer on a factory floor watching a robotic arm in operation
+- Article about AI tools / dashboards / agents → a knowledge worker at a desk reviewing a complex dashboard or data visualization on a monitor
+- Article about AI research / breakthroughs → researchers at workstations with multiple monitors showing code or data, or a lab equipment shot
+- Article about AI in education → a classroom with students using laptops, or a university lecture hall
+- Article about AI in finance → a trading floor or analyst at a multi-monitor workstation
+- Article about AI in retail / consumer / marketing → a retail floor with customers, or a marketing team reviewing a campaign
+
+Describe the human subject AND the setting in 1-2 specific sentences. Be concrete — name the kind of room, the activity, and what the people are doing. Do NOT mention the navy element, color palette, lighting, or any text — those are handled by the style guide.
+
 Reply with ONLY the description, no preamble.
 
 Title: {title}
