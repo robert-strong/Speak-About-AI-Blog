@@ -301,7 +301,9 @@ def generate_image_gemini_flash(prompt, aspect_ratio="16:9", style_reference_url
                     }
                 })
                 parts.append({"text": f"Use the above image as a style reference. Generate a new image with this style: {full_prompt}"})
+                print(f"   Style reference image loaded ({len(img_data)} bytes, {content_type})")
             else:
+                print(f"Warning: Style reference image fetch failed (status {img_response.status_code})")
                 parts.append({"text": full_prompt})
         except Exception as e:
             print(f"Warning: Could not fetch style reference image: {e}")

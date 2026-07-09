@@ -284,15 +284,21 @@ def process_item_api(api, item, dry_run=False, force=False):
         try:
             style_ref = api.get_setting("image_style_reference")
             if style_ref:
+                print(f"  Using style reference: {style_ref[:80]}...")
                 cmd.extend(["--style-reference", style_ref])
-        except:
-            pass
+            else:
+                print("  No style reference URL configured")
+        except Exception as e:
+            print(f"  Warning: Could not fetch image_style_reference: {e}")
         try:
             style_desc = api.get_setting("image_style_description")
             if style_desc:
+                print(f"  Using style description: {style_desc[:60]}...")
                 cmd.extend(["--style-description", style_desc])
-        except:
-            pass
+            else:
+                print("  No style description configured")
+        except Exception as e:
+            print(f"  Warning: Could not fetch image_style_description: {e}")
 
         print("  Command:")
         print("    " + " ".join(repr(a) for a in cmd[:6]) + " ...")
