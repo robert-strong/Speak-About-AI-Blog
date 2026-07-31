@@ -255,8 +255,8 @@ def _build_body_prompt(title, brief, settings=None):
     settings = settings or {}
 
     # Check for custom prompt override
-    custom_prompt = settings.get('draft_body_prompt', '').strip()
-    if custom_prompt:
+    custom_prompt = settings.get('draft_body_prompt', '')
+    if isinstance(custom_prompt, str) and custom_prompt.strip():
         prompt_template = custom_prompt
     else:
         prompt_template = DEFAULT_BODY_PROMPT
@@ -275,10 +275,12 @@ Prefer commas, periods, or restructured clauses over parenthetical dash construc
 Hyphenated compound words are fine (e.g., "decision-makers", "real-world", "AI-powered").'''),
     }
 
+    # KeyError = unknown {variable}; ValueError/IndexError = stray unescaped
+    # brace in a custom prompt (e.g. literal JSON in the template).
     try:
         return prompt_template.format(**subs)
-    except KeyError as e:
-        print(f"   Warning: Prompt template has unknown variable {e}, using defaults")
+    except (KeyError, IndexError, ValueError) as e:
+        print(f"   Warning: Prompt template failed to format ({type(e).__name__}: {e}), using defaults")
         return DEFAULT_BODY_PROMPT.format(**subs)
 
 EXCERPT_PROMPT = """Write a single-sentence excerpt (15-25 words) summarizing the article below for a blog post listing page.

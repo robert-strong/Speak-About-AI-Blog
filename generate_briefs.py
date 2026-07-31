@@ -215,7 +215,11 @@ def claude_generate(existing_briefs, count, settings=None):
     existing_block = "\n".join(f"- {b}" for b in existing_briefs) or "(none yet — this is the first batch)"
 
     # Get CTA ratio from settings or use default (0.6)
-    cta_ratio = float(settings.get('cta_ratio', '0.6'))
+    try:
+        cta_ratio = float(settings.get('cta_ratio') or 0.6)
+    except (TypeError, ValueError):
+        print(f"   Warning: Invalid cta_ratio setting {settings.get('cta_ratio')!r}, using 0.6")
+        cta_ratio = 0.6
     cta_count = round(count * cta_ratio)
     non_cta_count = count - cta_count
     print(f"   CTA ratio: {cta_ratio} ({cta_count} with CTA, {non_cta_count} without)")
@@ -223,9 +227,9 @@ def claude_generate(existing_briefs, count, settings=None):
     # Get prompt template from settings or use default
     prompt_template = settings.get('briefs_prompt') or BRIEFS_PROMPT
 
-    # If the custom prompt is empty or whitespace, fall back to default
-    if not prompt_template.strip():
-        print("   Warning: Custom prompt is empty, using default prompt")
+    # If the custom prompt is empty, whitespace, or not text, fall back to default
+    if not isinstance(prompt_template, str) or not prompt_template.strip():
+        print("   Warning: Custom prompt is empty or not text, using default prompt")
         prompt_template = BRIEFS_PROMPT
 
     # Build the substitution dictionary
@@ -244,16 +248,22 @@ def claude_generate(existing_briefs, count, settings=None):
         'brief_requirements': settings.get('brief_requirements', ''),
     }
 
-    # Try to format the prompt, falling back to default if there's an error
+    # Try to format the prompt, falling back to default if there's an error.
+    # KeyError = unknown {variable}; ValueError/IndexError = stray unescaped
+    # brace in a custom prompt (e.g. literal JSON in the template).
     try:
         prompt = prompt_template.format(**subs)
-    except KeyError as e:
-        print(f"   Warning: Prompt template has unknown variable {e}, using default prompt")
+    except (KeyError, IndexError, ValueError) as e:
+        print(f"   Warning: Prompt template failed to format ({type(e).__name__}: {e}), using default prompt")
         prompt = BRIEFS_PROMPT.format(**subs)
 
     # Determine whether to enable web search and how many searches to allow
-    enable_web_search = settings.get('enable_web_search', 'true').lower() in ('true', '1', 'yes')
-    max_web_searches = int(settings.get('max_web_searches', '5'))
+    enable_web_search = str(settings.get('enable_web_search', 'true')).lower() in ('true', '1', 'yes')
+    try:
+        max_web_searches = int(settings.get('max_web_searches') or 5)
+    except (TypeError, ValueError):
+        print(f"   Warning: Invalid max_web_searches setting {settings.get('max_web_searches')!r}, using 5")
+        max_web_searches = 5
     print(f"   Web search: {'enabled' if enable_web_search else 'disabled'} (max {max_web_searches})")
 
     # Build request payload
