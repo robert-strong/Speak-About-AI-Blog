@@ -206,6 +206,59 @@ def get_existing_briefs(ws, headers, limit=30):
     return existing[-limit:]
 
 
+def _looks_like_briefs(value):
+    """A briefs array is a non-empty list of strings and/or objects — this
+    rejects decoys like citation markers ([1]) or nested keyword lists that
+    happen to parse."""
+    return (isinstance(value, list) and value
+            and all(isinstance(x, (str, dict)) for x in value))
+
+
+def _repair_truncated_array(fragment):
+    """Given text starting at '[' that doesn't parse (reply cut off at
+    max_tokens), trim back to the last complete element and close the array."""
+    for m in reversed(list(re.finditer(r'[}"]', fragment))):
+        snippet = fragment[:m.end()].rstrip().rstrip(",") + "]"
+        try:
+            value = json.loads(snippet)
+        except json.JSONDecodeError:
+            continue
+        if _looks_like_briefs(value):
+            return value
+    return None
+
+
+def _extract_briefs_array(text):
+    """Extract a JSON array from Claude's reply, tolerating prose preambles,
+    markdown code fences, and output truncated at the token limit."""
+    decoder = json.JSONDecoder()
+
+    # Prefer content inside a fenced code block if one exists (the fence may
+    # be unterminated when the reply was cut off at max_tokens).
+    candidates = []
+    fence = re.search(r"```(?:json)?\s*(.*?)(?:```|$)", text, re.DOTALL)
+    if fence:
+        candidates.append(fence.group(1))
+    candidates.append(text)
+
+    for cand in candidates:
+        idx = cand.find("[")
+        while idx != -1:
+            try:
+                value, _ = decoder.raw_decode(cand, idx)
+                if _looks_like_briefs(value):
+                    return value
+            except json.JSONDecodeError:
+                # Attempt truncation repair here, before falling through to a
+                # later '[' — otherwise a nested array inside the truncated
+                # outer array (e.g. a keywords list) would win incorrectly.
+                repaired = _repair_truncated_array(cand[idx:])
+                if repaired is not None:
+                    return repaired
+            idx = cand.find("[", idx + 1)
+    return None
+
+
 def claude_generate(existing_briefs, count, settings=None):
     """Generate briefs using Claude with optional settings override."""
     if not ANTHROPIC_KEY:
@@ -269,8 +322,11 @@ def claude_generate(existing_briefs, count, settings=None):
     # Build request payload
     request_json = {
         "model": TEXT_MODEL,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "temperature": 0.85,
+        "system": ("Your final reply must be ONLY the requested JSON array — "
+                   "no prose before or after it and no markdown code fences. "
+                   "It must parse with json.loads()."),
         "messages": [{"role": "user", "content": prompt}],
     }
 
@@ -310,26 +366,15 @@ def claude_generate(existing_briefs, count, settings=None):
         for q in searches:
             print(f"   - {q!r}")
 
+    if response.get("stop_reason") == "max_tokens":
+        print("   Warning: reply hit the max_tokens limit and was truncated; "
+              "salvaging the complete briefs from the partial output.")
+
     text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
 
-    # Strip markdown fences if Claude added them despite instructions
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-
-    try:
-        briefs = json.loads(text)
-    except json.JSONDecodeError as e:
-        # Try to salvage: find the first '[' and last ']' and parse that slice
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                briefs = json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                sys.exit(f"Claude returned non-JSON output: {e}\nFirst 500 chars: {text[:500]}")
-        else:
-            sys.exit(f"Claude returned non-JSON output: {e}\nFirst 500 chars: {text[:500]}")
+    briefs = _extract_briefs_array(text)
+    if briefs is None:
+        sys.exit(f"Claude returned non-JSON output.\nFirst 500 chars: {text[:500]}")
 
     if not isinstance(briefs, list):
         sys.exit(f"Expected JSON array; got {type(briefs).__name__}")
