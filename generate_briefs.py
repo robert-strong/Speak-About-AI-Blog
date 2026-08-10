@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 
 # Force UTF-8 stdout/stderr on Windows so smart quotes & em-dashes render.
 if sys.platform == "win32":
@@ -340,19 +341,39 @@ def claude_generate(existing_briefs, count, settings=None):
             "max_uses": max_web_searches,
         }]
 
-    r = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        },
-        json=request_json,
-        timeout=240,
-    )
-    if not r.ok:
-        sys.exit(f"Claude error {r.status_code}: {r.text[:500]}")
-    response = r.json()
+    # Generation with web search + 16k max_tokens can run several minutes;
+    # retry on timeouts and transient API errors so one hiccup doesn't kill
+    # the monthly run.
+    attempts = 3
+    response = None
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": ANTHROPIC_VERSION,
+                    "content-type": "application/json",
+                },
+                json=request_json,
+                timeout=540,
+            )
+        except (requests.Timeout, requests.ConnectionError) as e:
+            if attempt == attempts:
+                sys.exit(f"Claude request failed after {attempts} attempts: {e}")
+            print(f"   Attempt {attempt}/{attempts} failed ({type(e).__name__}), retrying...")
+            time.sleep(15)
+            continue
+        if r.status_code in (429, 500, 502, 503, 504, 529) and attempt < attempts:
+            print(f"   Attempt {attempt}/{attempts} got HTTP {r.status_code}, retrying...")
+            time.sleep(30)
+            continue
+        if not r.ok:
+            sys.exit(f"Claude error {r.status_code}: {r.text[:500]}")
+        response = r.json()
+        break
+    if response is None:
+        sys.exit(f"Claude request did not succeed after {attempts} attempts.")
     blocks = response.get("content", [])
 
     # Surface searches Claude performed so the run log is auditable.

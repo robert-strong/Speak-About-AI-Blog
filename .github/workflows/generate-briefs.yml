@@ -19,7 +19,9 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Generation with web search + a 16k output budget can take several
+    # minutes per attempt, and the script retries up to 3 times.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
