@@ -207,6 +207,69 @@ def get_existing_briefs(ws, headers, limit=30):
     return existing[-limit:]
 
 
+def _stream_claude_message(request_json):
+    """POST /v1/messages with stream=true and reassemble the final message.
+
+    Long generations over a single non-streaming HTTP request get the
+    connection dropped by the API after a few minutes; streaming keeps the
+    connection alive. Returns (status_code, error_text, message) where
+    message mimics the non-streaming response shape: {"content": [...],
+    "stop_reason": ...}. Raises requests.ConnectionError on a mid-stream
+    error event so the caller's retry loop handles it.
+    """
+    payload = dict(request_json, stream=True)
+    with requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        },
+        json=payload,
+        stream=True,
+        timeout=(30, 120),  # (connect, per-chunk read); pings keep it alive
+    ) as r:
+        if not r.ok:
+            return r.status_code, r.text[:500], None
+
+        blocks = []
+        stop_reason = None
+        partial_json = ""
+        for raw in r.iter_lines(decode_unicode=True):
+            if not raw or not raw.startswith("data:"):
+                continue
+            try:
+                event = json.loads(raw[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "content_block_start":
+                blocks.append(dict(event.get("content_block") or {}))
+                partial_json = ""
+            elif etype == "content_block_delta":
+                delta = event.get("delta") or {}
+                if delta.get("type") == "text_delta" and blocks:
+                    blocks[-1]["text"] = blocks[-1].get("text", "") + delta.get("text", "")
+                elif delta.get("type") == "input_json_delta":
+                    partial_json += delta.get("partial_json", "")
+            elif etype == "content_block_stop":
+                # Tool-use inputs (e.g. web_search queries) arrive as
+                # partial JSON deltas; parse once the block closes.
+                if blocks and partial_json and blocks[-1].get("type") in ("server_tool_use", "tool_use"):
+                    try:
+                        blocks[-1]["input"] = json.loads(partial_json)
+                    except json.JSONDecodeError:
+                        pass
+                partial_json = ""
+            elif etype == "message_delta":
+                stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+            elif etype == "error":
+                raise requests.ConnectionError(
+                    f"API stream error: {event.get('error')}")
+
+        return 200, None, {"content": blocks, "stop_reason": stop_reason}
+
+
 def _looks_like_briefs(value):
     """A briefs array is a non-empty list of strings and/or objects — this
     rejects decoys like citation markers ([1]) or nested keyword lists that
@@ -341,36 +404,27 @@ def claude_generate(existing_briefs, count, settings=None):
             "max_uses": max_web_searches,
         }]
 
-    # Generation with web search + 16k max_tokens can run several minutes;
-    # retry on timeouts and transient API errors so one hiccup doesn't kill
-    # the monthly run.
+    # Generation with web search + 16k max_tokens runs longer than the API
+    # allows a single non-streaming HTTP response to stay open, so stream
+    # the reply. Retry on timeouts and transient errors so one hiccup
+    # doesn't kill the monthly run.
     attempts = 3
     response = None
     for attempt in range(1, attempts + 1):
         try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": ANTHROPIC_VERSION,
-                    "content-type": "application/json",
-                },
-                json=request_json,
-                timeout=540,
-            )
+            status, err_text, response = _stream_claude_message(request_json)
         except (requests.Timeout, requests.ConnectionError) as e:
             if attempt == attempts:
                 sys.exit(f"Claude request failed after {attempts} attempts: {e}")
             print(f"   Attempt {attempt}/{attempts} failed ({type(e).__name__}), retrying...")
             time.sleep(15)
             continue
-        if r.status_code in (429, 500, 502, 503, 504, 529) and attempt < attempts:
-            print(f"   Attempt {attempt}/{attempts} got HTTP {r.status_code}, retrying...")
+        if status in (429, 500, 502, 503, 504, 529) and attempt < attempts:
+            print(f"   Attempt {attempt}/{attempts} got HTTP {status}, retrying...")
             time.sleep(30)
             continue
-        if not r.ok:
-            sys.exit(f"Claude error {r.status_code}: {r.text[:500]}")
-        response = r.json()
+        if status != 200:
+            sys.exit(f"Claude error {status}: {err_text}")
         break
     if response is None:
         sys.exit(f"Claude request did not succeed after {attempts} attempts.")
