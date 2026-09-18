@@ -300,7 +300,13 @@ def generate_image_gemini_flash(prompt, aspect_ratio="16:9", style_reference_url
                         "data": img_data
                     }
                 })
-                parts.append({"text": f"Use the above image as a style reference. Generate a new image with this style: {full_prompt}"})
+                parts.append({"text": (
+                    "The image above is a previous page from the same illustrated series. "
+                    "Match its drawing style exactly: the ink outline weight, the flat cel shading, "
+                    "the colour palette, the character design, and the cream title band with navy lettering. "
+                    "Do NOT copy its scene, people, layout, or title. Draw a NEW page in that same style "
+                    f"for the following brief:\n\n{full_prompt}"
+                )})
                 print(f"   Style reference image loaded ({len(img_data)} bytes, {content_type})")
             else:
                 print(f"Warning: Style reference image fetch failed (status {img_response.status_code})")
@@ -427,9 +433,9 @@ def compose_image_prompt(user_prompt, style_preamble, display_title=None):
     if style_preamble:
         parts.append(style_preamble)
     if display_title:
-        parts.append(f'The navy backdrop must clearly display the text "{display_title.upper()}" '
-                     f'in bold white sans-serif uppercase letters, well-kerned, prominently centered. '
-                     f'Render only this text on the backdrop and no other text anywhere in the image.')
+        parts.append(f'The cream title band across the top of the image must display exactly this text: '
+                     f'"{display_title}" in bold navy sans-serif lettering, well-kerned, centered, and '
+                     f'spelled exactly as written. Render no other readable text anywhere in the image.')
     parts.append(f"Subject for this image: {user_prompt}")
     return "\n\n".join(parts)
 

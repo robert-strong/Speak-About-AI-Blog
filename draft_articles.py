@@ -303,7 +303,7 @@ Article:
 {body}
 """
 
-IMAGE_PROMPT_PROMPT = """Suggest a visual subject for the hero image of this blog post. The image is a documentary-style photograph; brand styling (a navy element with the post's title rendered on it) is added separately by the style guide.
+IMAGE_PROMPT_PROMPT = """Describe the SCENE for the hero image of this blog post. Every hero image is one page from the same illustrated comic-style series (clean ink outlines, flat colour, a cream title band across the top). The drawing style, palette, and title band are fixed by a separate style guide. Your job is only the scene: who is in it, where they are, and what is happening.
 
 Pick a scene that VISUALLY MATCHES THE SPECIFIC TOPIC of this article. STRONG VARIETY across posts is desirable — do NOT default to a "speaker at a podium" or "panel on a stage" scene unless the article is genuinely about hiring/booking a keynote speaker. Most AI topics are not about speakers.
 
@@ -319,7 +319,7 @@ Examples by topic flavor:
 - Article about AI in finance → a trading floor or analyst at a multi-monitor workstation
 - Article about AI in retail / consumer / marketing → a retail floor with customers, or a marketing team reviewing a campaign
 
-Describe the human subject AND the setting in 1-2 specific sentences. Be concrete — name the kind of room, the activity, and what the people are doing. Do NOT mention the navy element, color palette, lighting, or any text — those are handled by the style guide.
+Describe the people AND the setting in 2-3 specific sentences, the way you would brief an illustrator for a single comic panel: the kind of room, the camera angle (wide stage shot, over-the-shoulder at a table, medium two-shot, crowd from the side), what each key person is doing, their expression, and one or two props that carry the idea (a dashboard, a calendar, a thought bubble with a simple icon). Vary the angle and layout from post to post. Do NOT mention the drawing style, colours, the title band, or any readable text — those are handled by the style guide.
 
 Reply with ONLY the description, no preamble.
 
