@@ -35,6 +35,19 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
+      - name: Verify credentials before running
+        # Fails fast, with the exact secret to rotate, instead of failing
+        # mid-run after queue items have been touched. Emails admins on failure.
+        env:
+          CONTENTFUL_CMA_TOKEN: ${{ secrets.CONTENTFUL_CMA_TOKEN }}
+          CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
+          CONTENTFUL_ENVIRONMENT: ${{ secrets.CONTENTFUL_ENVIRONMENT || 'master' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
+          BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
+          BLOG_PIPELINE_API_KEY: ${{ secrets.BLOG_PIPELINE_API_KEY }}
+        run: python check_credentials.py --require contentful,blog_api --notify
+
       - name: Publish to Contentful
         env:
           # Contentful (create_blog_entry.py expects CONTENTFUL_CMA_TOKEN)

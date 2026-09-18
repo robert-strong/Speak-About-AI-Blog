@@ -19,6 +19,12 @@ USAGE
 Required env (loaded from .env / .env.local or set externally):
     ANTHROPIC_API_KEY        — sk-ant-api03-...
 
+Optional, for de-duplicating against articles already in Contentful:
+    CONTENTFUL_CMA_TOKEN     — CFPAT-... (same token the publish step uses)
+    CONTENTFUL_SPACE_ID      — Contentful space ID
+    CONTENTFUL_ENVIRONMENT   — default 'master'
+    SKIP_CONTENTFUL_HISTORY  — set 'true' to skip the catalogue check
+
 For REST API backend (preferred):
     USE_BLOG_API             — set to 'true' to use REST API
     BLOG_API_BASE            — API base URL (default: https://speakabout.ai/api/blog-pipeline)
@@ -53,6 +59,12 @@ except ImportError:
     pass
 
 import requests
+
+try:
+    from contentful_history import (fetch_published_topics, format_history_block,
+                                    closest_matches)
+except ImportError:  # keep the script runnable if the module is missing
+    fetch_published_topics = format_history_block = closest_matches = None
 
 # Only import Google Sheets libraries if needed (they may not be installed)
 gspread = None
@@ -95,7 +107,8 @@ def _get_settings():
                     'brief_length_min', 'brief_length_max',
                     'article_length_min', 'article_length_max',
                     'topic_areas', 'avoid_list', 'search_queries', 'brief_requirements',
-                    'enable_web_search', 'max_web_searches']:
+                    'enable_web_search', 'max_web_searches',
+                    'contentful_dedup', 'contentful_dedup_drop']:
             try:
                 value = api.get_setting(key)
                 if value is not None:
@@ -162,12 +175,16 @@ TOPIC AREAS TO ROTATE ACROSS (pick a different one per brief):
 
 AVOID
 - Duplicating angles from the existing briefs listed below
+- Repeating the subject of any article already published on the site (listed below), even under a new title or with a different hook
 - Vague AI-thought-leadership generalities without concrete specifics
 - Generic "what is AI" explainers
 - Overplayed framings — bring a fresh contrarian or specific angle (e.g., not "ChatGPT for business" but "Why ChatGPT-only deployments stall in enterprise: the integration gap")
 
 EXISTING BRIEFS (do not duplicate these angles):
 {existing_briefs}
+
+ARTICLES ALREADY PUBLISHED ON SPEAKABOUT.AI (do not repeat these subjects; a new brief must take a clearly different subject, or a genuinely new angle that a reader of the existing article would still need):
+{published_topics}
 
 OUTPUT FORMAT
 Reply with ONLY a JSON array of {count} strings. Each string is a single brief. No preamble, no markdown code fences, no explanation. The output must be valid JSON parseable by json.loads(). Use double quotes inside briefs by escaping them as \\".
@@ -323,13 +340,22 @@ def _extract_briefs_array(text):
     return None
 
 
-def claude_generate(existing_briefs, count, settings=None):
-    """Generate briefs using Claude with optional settings override."""
+def claude_generate(existing_briefs, count, settings=None, published_topics=None):
+    """Generate briefs using Claude with optional settings override.
+
+    published_topics is the Contentful catalogue from contentful_history
+    (list of dicts). It is rendered into the prompt so Claude can steer clear
+    of subjects the site already covers.
+    """
     if not ANTHROPIC_KEY:
         sys.exit("ANTHROPIC_API_KEY is not set.")
 
     settings = settings or {}
     existing_block = "\n".join(f"- {b}" for b in existing_briefs) or "(none yet — this is the first batch)"
+    if published_topics and format_history_block:
+        published_block = format_history_block(published_topics)
+    else:
+        published_block = "(catalogue unavailable for this run)"
 
     # Get CTA ratio from settings or use default (0.6)
     try:
@@ -349,12 +375,20 @@ def claude_generate(existing_briefs, count, settings=None):
         print("   Warning: Custom prompt is empty or not text, using default prompt")
         prompt_template = BRIEFS_PROMPT
 
+    # A custom prompt saved before the catalogue existed has no
+    # {published_topics} slot. Fold the catalogue into the existing-briefs
+    # block so it still reaches Claude through the slot every prompt has.
+    if '{published_topics}' not in prompt_template and published_topics:
+        existing_block += ("\n\nARTICLES ALREADY PUBLISHED ON SPEAKABOUT.AI "
+                           "(do not repeat these subjects):\n" + published_block)
+
     # Build the substitution dictionary
     subs = {
         'count': count,
         'cta_count': cta_count,
         'non_cta_count': non_cta_count,
         'existing_briefs': existing_block,
+        'published_topics': published_block,
         'brief_length_min': settings.get('brief_length_min', '100'),
         'brief_length_max': settings.get('brief_length_max', '180'),
         'article_length_min': settings.get('article_length_min', '1500'),
@@ -527,6 +561,223 @@ def claude_generate(existing_briefs, count, settings=None):
     return processed
 
 
+def _setting_flag(settings, key, default=True):
+    """Read a true/false setting saved from the admin UI."""
+    value = settings.get(key) if settings else None
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def load_contentful_history(settings=None):
+    """Fetch the blog catalogue from Contentful, or [] if disabled/unavailable.
+
+    Disable with the admin setting contentful_dedup=false or the env var
+    SKIP_CONTENTFUL_HISTORY=true. A fetch failure never aborts the run; the
+    generator just falls back to queue-only de-duplication.
+    """
+    if os.environ.get("SKIP_CONTENTFUL_HISTORY", "").lower() in ("true", "1", "yes"):
+        print("Contentful history check disabled via SKIP_CONTENTFUL_HISTORY.")
+        return []
+    if not _setting_flag(settings, 'contentful_dedup', True):
+        print("Contentful history check disabled via contentful_dedup setting.")
+        return []
+    if fetch_published_topics is None:
+        print("   Warning: contentful_history module not available; skipping catalogue check.")
+        return []
+    has_token = os.environ.get("CONTENTFUL_CMA_TOKEN") or os.environ.get("CONTENTFUL_MANAGEMENT_TOKEN")
+    if not has_token or not os.environ.get("CONTENTFUL_SPACE_ID"):
+        print("   Warning: CONTENTFUL_CMA_TOKEN / CONTENTFUL_SPACE_ID not set; "
+              "briefs will only be de-duplicated against the queue, not the published site.")
+        return []
+    print("Fetching published article catalogue from Contentful...")
+    try:
+        topics = fetch_published_topics()
+    except Exception as e:
+        print(f"   Warning: Could not fetch Contentful catalogue ({type(e).__name__}: {e}); "
+              "continuing without it.")
+        return []
+    live = sum(1 for t in topics if t["live"])
+    print(f"Found {len(topics)} article(s) in Contentful ({live} published, "
+          f"{len(topics) - live} awaiting approval).")
+    return topics
+
+
+def _claude_json_request(request_json, attempts=3):
+    """Run a Claude request with retries and return the reply text, or None."""
+    for attempt in range(1, attempts + 1):
+        try:
+            status, err_text, response = _stream_claude_message(request_json)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            print(f"   Attempt {attempt}/{attempts} failed ({type(e).__name__})")
+            if attempt < attempts:
+                time.sleep(15)
+            continue
+        if status in (429, 500, 502, 503, 504, 529) and attempt < attempts:
+            print(f"   Attempt {attempt}/{attempts} got HTTP {status}, retrying...")
+            time.sleep(30)
+            continue
+        if status != 200:
+            print(f"   Claude error {status}: {err_text}")
+            return None
+        blocks = response.get("content", [])
+        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    return None
+
+
+def _parse_json_array(text):
+    """Pull the first JSON array out of a reply, tolerating fences and preambles."""
+    if not text:
+        return None
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def judge_briefs_against_history(briefs, topics):
+    """Ask Claude which candidate briefs repeat an article already on the site.
+
+    Returns a list (one entry per brief, same order) of dicts:
+        {"verdict": "duplicate" | "overlap" | "distinct",
+         "matches": [slug, ...], "reason": str}
+    Returns None if the judge could not run, so the caller keeps every brief.
+    """
+    if not briefs or not topics or not ANTHROPIC_KEY:
+        return None
+
+    catalogue = "\n".join(
+        f"{i + 1}. {t['title']} (/{t['slug']})" + (f" — {t['excerpt'][:200]}" if t['excerpt'] else "")
+        for i, t in enumerate(topics)
+    )
+    candidates = "\n\n".join(f"BRIEF {i + 1}:\n{b}" for i, b in enumerate(briefs))
+    prompt = f"""You are the editor of the Speak About AI blog. Below is every article already on the site, followed by candidate briefs for new articles. For EACH candidate, decide whether the site already covers its subject.
+
+Verdicts:
+- "duplicate": the core subject and angle are already covered by an existing article. A reader of that article would learn nothing new. Different wording or a new hook does not make it distinct.
+- "overlap": shares a topic area with an existing article but takes a clearly different angle, audience, or question that the existing piece does not answer.
+- "distinct": no existing article covers this subject.
+
+EXISTING ARTICLES:
+{catalogue}
+
+CANDIDATE BRIEFS:
+{candidates}
+
+Reply with ONLY a JSON array with exactly {len(briefs)} objects, in brief order, each shaped as:
+{{"brief": <number>, "verdict": "duplicate" | "overlap" | "distinct", "matches": ["<slug of the closest existing article, if any>"], "reason": "<one sentence>"}}
+No preamble, no markdown fences."""
+
+    request_json = {
+        "model": TEXT_MODEL,
+        "max_tokens": 4096,
+        "temperature": 0,
+        "system": "Reply with ONLY the requested JSON array. It must parse with json.loads().",
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    text = _claude_json_request(request_json)
+    parsed = _parse_json_array(text)
+    if not isinstance(parsed, list):
+        print("   Warning: duplicate judge returned unparseable output; keeping all briefs.")
+        return None
+
+    by_number = {}
+    for item in parsed:
+        if isinstance(item, dict):
+            try:
+                by_number[int(item.get("brief"))] = item
+            except (TypeError, ValueError):
+                pass
+    verdicts = []
+    for i in range(len(briefs)):
+        item = by_number.get(i + 1)
+        if item is None:
+            item = parsed[i] if i < len(parsed) and isinstance(parsed[i], dict) else {}
+        verdict = str(item.get("verdict", "distinct")).strip().lower()
+        if verdict not in ("duplicate", "overlap", "distinct"):
+            verdict = "distinct"
+        matches = item.get("matches") or []
+        if isinstance(matches, str):
+            matches = [matches]
+        verdicts.append({
+            "verdict": verdict,
+            "matches": [str(m) for m in matches if m],
+            "reason": str(item.get("reason", "")).strip(),
+        })
+    return verdicts
+
+
+def _print_verdict(v):
+    label = v["verdict"].upper()
+    match = f" -> {', '.join(v['matches'])}" if v["matches"] else ""
+    print(f"   [{label}]{match} {v['reason'][:160]}")
+
+
+def screen_briefs_against_history(briefs, topics, existing, count, settings=None):
+    """Drop briefs that repeat published subjects, then top up once.
+
+    1. Print the closest published titles for each brief (lexical, for the log).
+    2. Ask Claude to judge each brief against the catalogue and drop the
+       "duplicate" ones (unless contentful_dedup_drop=false, which only warns).
+    3. If briefs were dropped, ask for replacements once, with the dropped
+       briefs added to the avoid list, and judge those too.
+    """
+    if not briefs or not topics:
+        return briefs
+
+    print("Checking briefs against the published catalogue...")
+    if closest_matches:
+        for i, b in enumerate(briefs, 1):
+            near = closest_matches(b, topics, top_n=2, min_score=0.34)
+            if near:
+                hits = "; ".join(f"{t['title']} ({score:.0%})" for score, t in near)
+                print(f"   Brief {i} shares vocabulary with: {hits}")
+
+    drop = _setting_flag(settings, 'contentful_dedup_drop', True)
+    verdicts = judge_briefs_against_history(briefs, topics)
+    if verdicts is None:
+        return briefs
+
+    kept, dropped = [], []
+    for b, v in zip(briefs, verdicts):
+        _print_verdict(v)
+        if v["verdict"] == "duplicate" and drop:
+            dropped.append(b)
+        else:
+            kept.append(b)
+
+    if not dropped:
+        print("   No duplicates of published articles found.")
+        return kept
+    print(f"   Dropped {len(dropped)} brief(s) that repeat published subjects.")
+
+    shortfall = count - len(kept)
+    if shortfall <= 0:
+        return kept
+
+    print(f"Requesting {shortfall} replacement brief(s)...")
+    avoid = list(existing) + kept + dropped
+    try:
+        extra = claude_generate(avoid, shortfall, settings=settings, published_topics=topics)
+    except SystemExit as e:
+        print(f"   Warning: replacement generation failed ({e}); continuing with {len(kept)} brief(s).")
+        return kept
+    extra_verdicts = judge_briefs_against_history(extra, topics)
+    if extra_verdicts is None:
+        extra_verdicts = [{"verdict": "distinct", "matches": [], "reason": ""} for _ in extra]
+    for b, v in zip(extra, extra_verdicts):
+        _print_verdict(v)
+        if v["verdict"] == "duplicate" and drop:
+            print("   Replacement also duplicates a published subject; discarding it.")
+        else:
+            kept.append(b)
+    return kept[:count]
+
+
 REQUIRED_HEADERS = ("Status", "Brief")
 
 
@@ -580,14 +831,23 @@ def main():
         existing = api.get_existing_briefs(limit=30)
         print(f"Found {len(existing)} existing brief(s) (using last 30 for de-dup context).")
 
+        # Published catalogue from Contentful, so new briefs avoid old subjects
+        topics = load_contentful_history(settings)
+
         print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-        briefs = claude_generate(existing, args.count, settings=settings)
+        briefs = claude_generate(existing, args.count, settings=settings, published_topics=topics)
         print(f"Generated {len(briefs)} briefs.\n")
 
         if not briefs:
             print("WARNING: No briefs were generated. Check if the prompt template is valid.")
             print("The prompt may have formatting issues or Claude may have returned invalid JSON.")
             sys.exit(1)
+
+        briefs = screen_briefs_against_history(briefs, topics, existing, args.count, settings=settings)
+        if not briefs:
+            print("WARNING: Every generated brief repeated a published subject; nothing to queue.")
+            sys.exit(1)
+        print()
 
         for i, b in enumerate(briefs, 1):
             print(f"--- Brief {i} ({len(b)} chars) ---")
@@ -623,9 +883,12 @@ def main():
         existing = get_existing_briefs(ws, headers)
         print(f"Found {len(existing)} existing brief(s) in the sheet (using last 30 for de-dup context).")
 
+        topics = load_contentful_history()
+
         print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-        briefs = claude_generate(existing, args.count)
+        briefs = claude_generate(existing, args.count, published_topics=topics)
         print(f"Generated {len(briefs)} briefs.\n")
+        briefs = screen_briefs_against_history(briefs, topics, existing, args.count)
 
         for i, b in enumerate(briefs, 1):
             print(f"--- Brief {i} ({len(b)} chars) ---")
