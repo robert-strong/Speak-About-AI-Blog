@@ -319,7 +319,7 @@ Examples by topic flavor:
 - Article about AI in finance → a trading floor or analyst at a multi-monitor workstation
 - Article about AI in retail / consumer / marketing → a retail floor with customers, or a marketing team reviewing a campaign
 
-Describe the people AND the setting in 2-3 specific sentences, the way you would brief an illustrator for a single comic panel: the kind of room, the camera angle (wide stage shot, over-the-shoulder at a table, medium two-shot, crowd from the side), what each key person is doing, their expression, and one or two props that carry the idea (a dashboard, a calendar, a thought bubble with a simple icon). Vary the angle and layout from post to post. Do NOT mention the drawing style, colours, the title band, or any readable text — those are handled by the style guide.
+Describe the people AND the setting in 2-3 specific sentences, the way you would brief an illustrator for a single comic panel: the kind of room, the camera angle (wide stage shot, over-the-shoulder at a table, medium two-shot, crowd from the side), what each key person is doing, their expression, and one or two props that carry the idea (a dashboard, a calendar, a thought bubble with a simple icon). Vary the angle and layout from post to post. Give the main character a specific, distinct look (approximate age, hair, skin tone, attire) and vary it from post to post across gender, age, and appearance, so no two pages star the same person. Describe props by what they look like, not by a label to print on them. Do NOT mention the drawing style, colours, the title band, or any readable text — those are handled by the style guide.
 
 Reply with ONLY the description, no preamble.
 
