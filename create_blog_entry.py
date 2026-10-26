@@ -433,22 +433,40 @@ def compose_image_prompt(user_prompt, style_preamble, display_title=None):
     if style_preamble:
         parts.append(style_preamble)
     if display_title:
-        parts.append(f'The cream title band across the top of the image must display exactly this text: '
-                     f'"{display_title}" in bold navy sans-serif lettering, well-kerned, centered, and '
-                     f'spelled exactly as written. Render no other readable text anywhere in the image.')
+        parts.append(f'The cream title band across the top of the image must display exactly this text, '
+                     f'complete and nothing less: "{display_title}". Bold navy sans-serif lettering, well-kerned, '
+                     f'centered, spelled exactly as written. Every word must fit inside the band with margin on '
+                     f'both sides; use a second line and smaller lettering if needed, but never truncate, cut off, '
+                     f'or omit a word. Render no other readable text anywhere in the image.')
     parts.append(f"Subject for this image: {user_prompt}")
     return "\n\n".join(parts)
 
 
+MAX_DISPLAY_TITLE_WORDS = 8
+
+
 def _heuristic_display_title(title):
-    """Strip common filler words and trim to ~5 words."""
-    words = title.split()
-    drop = {"how", "to", "for", "your", "the", "a", "an", "of", "in", "on",
-            "with", "and", "or", "next", "ultimate", "complete", "guide"}
-    kept = [w for w in words if w.lower().rstrip(":,.") not in drop]
-    if not kept:
-        kept = words
-    return " ".join(kept[:5])
+    """Fallback when no model is available: always a COMPLETE phrase, never a cut-off fragment.
+
+    Prefers the part of the title before a colon or dash (e.g. "The Attendee Experience Gap")
+    when that is a usable length; otherwise returns the full title, which the image model
+    renders on two lines. Never trims a title mid-sentence (the old 5-word trim produced
+    headers like "Attendee Experience Gap: Why Speaker-Centric")."""
+    title = " ".join(title.split())
+    for sep in (":", " - ", " – ", " — ", "?"):
+        head, found, _ = title.partition(sep)
+        head = head.strip()
+        if found and 2 <= len(head.split()) <= MAX_DISPLAY_TITLE_WORDS:
+            return head + ("?" if sep == "?" else "")
+    return title
+
+
+def _clean_display_title(text):
+    """Strip markdown emphasis, quotes, labels and trailing punctuation from a model reply."""
+    text = (text or "").strip()
+    text = text.splitlines()[0].strip() if text else ""
+    text = re.sub(r"^(display title|title)\s*:\s*", "", text, flags=re.I)
+    return text.strip("*_#`").strip().strip('"\'.,;:').strip()
 
 
 def _display_title_via_anthropic(prompt):
@@ -525,16 +543,27 @@ def generate_display_title(full_title):
         f"Article title: {full_title}\n"
         "Display title:"
     )
-    caller = _display_title_via_gemini if provider == "gemini" else _display_title_via_anthropic
-    try:
-        text = caller(prompt)
-        if text:
-            text = text.strip('"\'.,;:').strip()
-            if 1 <= len(text.split()) <= 8 and len(text) <= 50:
-                return text
-    except Exception as e:
-        print(f"   (display title API call failed: {e}; using heuristic)", file=sys.stderr)
-    return _heuristic_display_title(full_title)
+    providers = [("anthropic", _display_title_via_anthropic, "ANTHROPIC_API_KEY"),
+                 ("gemini", _display_title_via_gemini, "GOOGLE_AI_API_KEY")]
+    if provider == "gemini":
+        providers.reverse()
+    for name, caller, env_var in providers:
+        if not os.environ.get(env_var):
+            print(f"   (display title: {env_var} not set; skipping {name})", file=sys.stderr)
+            continue
+        for attempt in range(2):
+            try:
+                text = _clean_display_title(caller(prompt))
+                if text and 1 <= len(text.split()) <= MAX_DISPLAY_TITLE_WORDS and len(text) <= 50:
+                    return text
+                print(f"   (display title via {name} rejected: {text!r})", file=sys.stderr)
+            except Exception as e:
+                print(f"   (display title via {name} failed: {e})", file=sys.stderr)
+                time.sleep(2)
+    fallback = _heuristic_display_title(full_title)
+    print(f"   WARNING: no model produced a display title; using the title as written: {fallback!r}",
+          file=sys.stderr)
+    return fallback
 
 
 def required_env_check(needs_google):

@@ -46,7 +46,7 @@ jobs:
           GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
           BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
           BLOG_PIPELINE_API_KEY: ${{ secrets.BLOG_PIPELINE_API_KEY }}
-        run: python check_credentials.py --require contentful,blog_api --notify
+        run: python check_credentials.py --require contentful,anthropic,blog_api --notify
 
       - name: Publish to Contentful
         env:
@@ -54,8 +54,9 @@ jobs:
           CONTENTFUL_CMA_TOKEN: ${{ secrets.CONTENTFUL_CMA_TOKEN }}
           CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
           CONTENTFUL_ENVIRONMENT: ${{ secrets.CONTENTFUL_ENVIRONMENT || 'master' }}
-          # Image generation
+          # Image generation (Gemini draws it; Claude writes the title on the band)
           GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # REST API backend (preferred)
           USE_BLOG_API: ${{ vars.USE_BLOG_API || 'true' }}
           BLOG_API_BASE: ${{ vars.BLOG_API_BASE || 'https://speakabout.ai/api/blog-pipeline' }}
