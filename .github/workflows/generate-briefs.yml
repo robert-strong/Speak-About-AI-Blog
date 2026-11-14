@@ -8,13 +8,9 @@ on:
     # have ~3-4 weeks to review/edit before the publishing pipeline fires
     # on the last Monday of the month.
     - cron: '23 4 1 * *'
+  # No inputs: every run generates a fixed batch of 2 briefs (BRIEF_COUNT in
+  # generate_briefs.py), the most that fits in one model reply.
   workflow_dispatch:
-    inputs:
-      count:
-        description: 'Number of briefs to generate'
-        required: false
-        default: '5'
-        type: string
 
 jobs:
   generate:
@@ -79,4 +75,4 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEET_WORKSHEET: '2026'
           GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
-        run: python generate_briefs.py --count ${{ github.event.inputs.count || '5' }}
+        run: python generate_briefs.py

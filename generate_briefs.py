@@ -12,8 +12,7 @@ The backend is selected via USE_BLOG_API env var. When set to 'true', the
 REST API is used; otherwise falls back to Google Sheets.
 
 USAGE
-    python3 generate_briefs.py                # generate 5 briefs (default)
-    python3 generate_briefs.py --count 3      # generate 3 briefs
+    python3 generate_briefs.py                # generate 2 briefs (fixed batch size)
     python3 generate_briefs.py --dry-run      # preview without writing
 
 Required env (loaded from .env / .env.local or set externally):
@@ -80,6 +79,11 @@ SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE",
 WORKSHEET_NAME = os.environ.get("SHEET_WORKSHEET", "Sheet1")
 
 TEXT_MODEL = "claude-sonnet-4-6"  # Sonnet for higher-quality brainstorming
+
+# Fixed batch size, deliberately not configurable. Briefs run ~35k characters
+# each, so two is all that fits in one reply's 16,384-token output budget;
+# asking for more gets the reply truncated and the extra briefs thrown away.
+BRIEF_COUNT = 2
 ANTHROPIC_VERSION = "2023-06-01"
 
 # API client (lazy import)
@@ -806,9 +810,8 @@ def append_to_sheet(ws, headers, briefs):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Generate AI blog briefs and append to queue.")
-    p.add_argument("--count", type=int, default=5,
-                   help="Number of briefs to generate (default 5; covers 5-Monday months).")
+    p = argparse.ArgumentParser(
+        description=f"Generate {BRIEF_COUNT} AI blog briefs and append to queue.")
     p.add_argument("--dry-run", action="store_true",
                    help="Preview briefs without writing to the queue.")
     args = p.parse_args()
@@ -834,8 +837,8 @@ def main():
         # Published catalogue from Contentful, so new briefs avoid old subjects
         topics = load_contentful_history(settings)
 
-        print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-        briefs = claude_generate(existing, args.count, settings=settings, published_topics=topics)
+        print(f"Asking Claude ({TEXT_MODEL}) for {BRIEF_COUNT} new briefs (with web search grounding)...")
+        briefs = claude_generate(existing, BRIEF_COUNT, settings=settings, published_topics=topics)
         print(f"Generated {len(briefs)} briefs.\n")
 
         if not briefs:
@@ -843,7 +846,7 @@ def main():
             print("The prompt may have formatting issues or Claude may have returned invalid JSON.")
             sys.exit(1)
 
-        briefs = screen_briefs_against_history(briefs, topics, existing, args.count, settings=settings)
+        briefs = screen_briefs_against_history(briefs, topics, existing, BRIEF_COUNT, settings=settings)
         if not briefs:
             print("WARNING: Every generated brief repeated a published subject; nothing to queue.")
             sys.exit(1)
@@ -885,10 +888,10 @@ def main():
 
         topics = load_contentful_history()
 
-        print(f"Asking Claude ({TEXT_MODEL}) for {args.count} new briefs (with web search grounding)...")
-        briefs = claude_generate(existing, args.count, published_topics=topics)
+        print(f"Asking Claude ({TEXT_MODEL}) for {BRIEF_COUNT} new briefs (with web search grounding)...")
+        briefs = claude_generate(existing, BRIEF_COUNT, published_topics=topics)
         print(f"Generated {len(briefs)} briefs.\n")
-        briefs = screen_briefs_against_history(briefs, topics, existing, args.count)
+        briefs = screen_briefs_against_history(briefs, topics, existing, BRIEF_COUNT)
 
         for i, b in enumerate(briefs, 1):
             print(f"--- Brief {i} ({len(b)} chars) ---")
